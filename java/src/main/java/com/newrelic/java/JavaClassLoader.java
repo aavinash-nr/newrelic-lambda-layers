@@ -33,15 +33,19 @@ public class JavaClassLoader implements RequestHandler<Object, Object> {
 
     static JavaClassLoader initializeRequestHandler(Class<?> loadedClass, String methodName) throws ReflectiveOperationException {
         Class<?> methodReturnType = Object.class;
-        Class<?> methodInputType = Object.class;
+        Class<?> methodInputType = null;
         Class<?> methodContextType = null;
+        int noOfArgs = 0;
         for (Method method : loadedClass.getMethods()) {
             if (isUserHandlerMethod(method, methodName, loadedClass)) {
                 methodReturnType = method.getReturnType();
-                methodInputType = method.getParameterTypes()[0];
+                if(method.getParameterTypes().length >0){
+                    methodInputType = method.getParameterTypes()[0];
+                }
                 if (method.getParameterTypes().length == 2) {
                     methodContextType = method.getParameterTypes()[1];
                 }
+                noOfArgs = method.getParameterTypes().length;
                 break;
             }
         }
@@ -54,10 +58,13 @@ public class JavaClassLoader implements RequestHandler<Object, Object> {
                 getMethodType(methodReturnType, methodInputType, methodContextType)
         ).bindTo(classInstance);
 
-        return new JavaClassLoader(methodInputType, methodHandle, methodContextType != null);
+        return new JavaClassLoader(methodInputType, methodHandle,  noOfArgs);
     }
 
     private static MethodType getMethodType(Class<?> methodReturnType, Class<?> methodInputType, Class<?> methodContextType) {
+        if(methodInputType == null){
+            return MethodType.methodType(methodReturnType);
+        }
         if (methodContextType == null) {
             return MethodType.methodType(methodReturnType, methodInputType);
         }
@@ -65,11 +72,15 @@ public class JavaClassLoader implements RequestHandler<Object, Object> {
     }
 
     // RequestHandler implementation constructor
-    private JavaClassLoader(Class<?> inputType, MethodHandle methodHandle, boolean hasTwoArguments) {
+    private JavaClassLoader(Class<?> inputType, MethodHandle methodHandle, int noOfArgs) {
         this.inputType = inputType;
-        this.executor = hasTwoArguments
-                ? methodHandle::invokeWithArguments
-                : (handlerType, contextParam) -> methodHandle.invokeWithArguments(handlerType);
+        if(noOfArgs == 0){
+            this.executor = (input, context) -> (Object) methodHandle.invoke();
+        } else if(noOfArgs == 1){
+            this.executor = (input, context) -> (Object) methodHandle.invokeWithArguments(input);
+        } else {
+            this.executor = (input, context) -> (Object) methodHandle.invokeWithArguments(input, context);
+        }
     }
 
     @Override
@@ -94,7 +105,7 @@ public class JavaClassLoader implements RequestHandler<Object, Object> {
             return false;
         }
 
-        if (method.getParameterTypes().length == 1) {
+        if (method.getParameterTypes().length <= 1) {
             return true;
         }
 
@@ -104,6 +115,9 @@ public class JavaClassLoader implements RequestHandler<Object, Object> {
     }
 
     private Object mappingInputToHandlerType(Object inputParam, Class<?> inputType) throws JsonProcessingException {
+        if (inputType == null) {
+            return inputParam;
+        }
         if (inputType.isAssignableFrom(Number.class) || inputType.isAssignableFrom(String.class)) {
             return inputParam;
         } else if (LambdaEventSerializers.isLambdaSupportedEvent(inputType.getName())) {
