@@ -218,7 +218,7 @@ function publish_layer {
 
     hash=$( hash_file $layer_archive | awk '{ print $1 }' )
 
-    bucket_name="nr-layers-${region}"
+    bucket_name="nr-extension-test-layers-${region}"
     s3_key="$( s3_prefix $runtime_name )/${hash}.${arch}.zip"
 
     compat_list=( $runtime_name )
