@@ -1,12 +1,8 @@
 name: Publish Extension Layer and Invoke Lambda
 
-#  Commented out the tag trigger and added a branch trigger.
+#  Removed the 'push' trigger to make this workflow manual-only.
 on:
   workflow_dispatch:
-  # push:
-  #   branches:
-    # tags:
-    #   - 'v*_extension'
 
 jobs:
   publish-extension:
@@ -14,23 +10,13 @@ jobs:
     outputs:
       x86_arn: ${{ steps.publish.outputs.x86_arn }}
       arm_arn: ${{ steps.publish.outputs.arm_arn }}
-      # tag_match: ${{ steps.extension-check-tag.outputs.match }} # No longer needed
-
     strategy:
       matrix:
         python-version: [ 3.12 ]
     steps:
       - uses: actions/checkout@v4
-      # - name: Check Tag
-      #   id: extension-check-tag
-      #   run: |
-      #     if [[ ${{ github.ref }} =~ ^refs/tags/v[0-9]+(\.[0-9]+)*_extension$ ]]; then
-      #       echo "match=true" >> $GITHUB_OUTPUT
-      #     fi
-          
+      
       - name: Install publish dependencies
-        # Commented out the 'if' condition.
-        # if: steps.extension-check-tag.outputs.match == 'true'
         run: pip install -U awscli
         
       - name: Set up QEMU
@@ -39,8 +25,6 @@ jobs:
           platforms: arm64, amd64
           
       - name: Publish extension layer
-        #Commented out the 'if' condition.
-        # if: steps.extension-check-tag.outputs.match == 'true'
         id: publish
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -52,8 +36,6 @@ jobs:
   invoke-lambda:
     needs: publish-extension 
     runs-on: ubuntu-latest
-    # Commented out the job-level 'if' condition.
-    # if: needs.publish-extension.outputs.tag_match == 'true'
     steps:
       - name: Invoke for Cold Start
         env:
