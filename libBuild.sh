@@ -91,11 +91,17 @@ function layer_name_str() {
     "python3.13")
       rt_part="Python313"
       ;;
+    "python3.14")
+      rt_part="Python314"
+      ;;
     "nodejs20.x")
       rt_part="NodeJS20X"
       ;;
     "nodejs22.x")
       rt_part="NodeJS22X"
+      ;;
+    "nodejs24.x")
+      rt_part="NodeJS24X"
       ;;
     "ruby3.2")
       rt_part="Ruby32"
@@ -148,11 +154,17 @@ function s3_prefix() {
     "python3.13")
       name="nr-python3.13"
       ;;
+    "python3.14")
+      name="nr-python3.14"
+      ;;
     "nodejs20.x")
       name="nr-nodejs20.x"
       ;;
     "nodejs22.x")
       name="nr-nodejs22.x"
+      ;;
+    "nodejs24.x")
+      name="nr-nodejs24.x"
       ;;
     "ruby3.3")
       name="nr-ruby3.3"
@@ -179,7 +191,7 @@ function agent_name_str() {
         "dotnet")
             agent_name="Dotnet"
             ;;
-        "nodejs20.x"|"nodejs22.x")
+        "nodejs20.x"|"nodejs22.x"|"nodejs24.x")
             agent_name="Node"
             ;;
         "ruby3.2"|"ruby3.3"|"ruby3.4")
@@ -188,7 +200,7 @@ function agent_name_str() {
         "java8.al2"|"java11"|"java17"|"java21")
             agent_name="Java"
             ;;
-        "python3.9"|"python3.10"|"python3.11"|"python3.12"|"python3.13")
+        "python3.9"|"python3.10"|"python3.11"|"python3.12"|"python3.13"|"python3.14")
             agent_name="Python"
             ;;
         *)
