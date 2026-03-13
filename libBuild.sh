@@ -366,6 +366,11 @@ function publish_docker_ecr {
     arch_flag=${arch}
     fi
 
+    if [[ $runtime_name == "python" || $runtime_name == "nodejs" ]]; then
+    version_flag=""
+    arch_flag=${arch}
+    fi
+
     slim_flag=""
     if [ "$slim" == "slim" ]; then
         slim_flag="-slim"
