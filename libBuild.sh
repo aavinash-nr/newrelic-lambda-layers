@@ -366,16 +366,6 @@ function publish_docker_ecr {
     arch_flag=${arch}
     fi
 
-    # Universal layers: runtime_name is "python" or "nodejs" with no version digits
-    if [[ $runtime_name == "python" ]]; then
-    version_flag="universal"
-    language_flag="python"
-    fi
-
-    if [[ $runtime_name == "nodejs" ]]; then
-    version_flag="universal"
-    language_flag="nodejs"
-    fi
     slim_flag=""
     if [ "$slim" == "slim" ]; then
         slim_flag="-slim"
