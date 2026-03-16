@@ -9,7 +9,6 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v4
     - name: Check Tag
       id: check-tag
       shell: bash
