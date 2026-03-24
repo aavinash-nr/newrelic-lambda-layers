@@ -2,6 +2,90 @@
 
 set -Eeuo pipefail
 
+# Tracks regions that were skipped due to AWS infrastructure errors
+SKIPPED_REGIONS=()
+
+# AWS error codes that indicate infrastructure/service-side issues.
+# These are NOT our fault — safe to skip the region and continue.
+AWS_INFRA_ERRORS=(
+  "InternalFailure"
+  "InternalError"
+  "InternalServerError"
+  "ServiceException"
+  "ServiceUnavailableException"
+  "RequestTimeout"
+  "RequestTimeoutException"
+  "ThrottlingException"
+  "TooManyRequestsException"
+  "EC2UnexpectedException"
+  "KMSInternalException"
+  "ProvisionedThroughputExceededException"
+)
+
+# Checks if an AWS CLI error message contains an infrastructure error code.
+# Returns 0 (true) if it's an AWS infra error, 1 (false) otherwise.
+function is_aws_infra_error {
+  local error_output="$1"
+
+  for err_code in "${AWS_INFRA_ERRORS[@]}"; do
+    if echo "$error_output" | grep -q "(${err_code})"; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+# Runs an AWS CLI command with infrastructure error detection.
+# If the command fails due to an AWS infra error, returns exit code 2.
+# If it fails for any other reason (credentials, params, etc.), returns exit code 1.
+# On success, returns 0.
+function run_aws_with_infra_check {
+  local output
+  local exit_code
+
+  output=$("$@" 2>&1) && exit_code=0 || exit_code=$?
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "$output"
+    return 0
+  fi
+
+  # Sanitize output: strip any line that might contain sensitive key/token info
+  local safe_output
+  safe_output=$(echo "$output" | grep -vi -E "(secret|password|token|credential)" || true)
+
+  if is_aws_infra_error "$output"; then
+    echo "WARNING: AWS infrastructure error detected:" >&2
+    echo "$safe_output" >&2
+    return 2
+  else
+    echo "ERROR: AWS command failed:" >&2
+    echo "$safe_output" >&2
+    return 1
+  fi
+}
+
+# Report any regions that were skipped due to AWS infrastructure errors.
+# Automatically runs on script exit via trap — no need to call manually.
+function report_skipped_regions {
+  if [[ ${#SKIPPED_REGIONS[@]} -gt 0 ]]; then
+    echo ""
+    echo "========================================="
+    echo "WARNING: The following regions were SKIPPED due to AWS infrastructure errors:"
+    for entry in "${SKIPPED_REGIONS[@]}"; do
+      echo "  - ${entry}"
+    done
+    echo "These regions may need a manual re-publish once the AWS issues are resolved."
+    echo "========================================="
+    echo ""
+    exit 1
+  fi
+}
+
+# Auto-report skipped regions when the script exits
+trap report_skipped_regions EXIT
+
 REGIONS=(
   sa-east-1
   me-central-1
@@ -241,8 +325,11 @@ function publish_public_layer {
   runtime_name=$7
   compat_list=("${@:8}")
 
+  local layer_version
+  local publish_result
 
-  layer_version=$(aws lambda publish-layer-version \
+  layer_version=$(run_aws_with_infra_check \
+    aws lambda publish-layer-version \
     --layer-name ${layer_name} \
     --content "S3Bucket=${bucket_name},S3Key=${s3_key}" \
     --description "${description}"\
@@ -250,19 +337,41 @@ function publish_public_layer {
     --compatible-runtimes ${compat_list[*]} \
     --region "$region" \
     --output text \
-    --query Version)
+    --query Version) && publish_result=0 || publish_result=$?
+
+  if [[ $publish_result -eq 2 ]]; then
+    echo "SKIPPING region ${region} for ${runtime_name} due to AWS infrastructure error"
+    SKIPPED_REGIONS+=("${region} (${runtime_name} - PublishLayerVersion failed)")
+    return 2
+  elif [[ $publish_result -ne 0 ]]; then
+    echo "FATAL: publish-layer-version failed for ${runtime_name} in ${region} — stopping"
+    return 1
+  fi
+
   echo "Published ${runtime_name} layer version ${layer_version} to ${region}"
 
   echo "Setting public permissions for ${runtime_name} layer version ${layer_version} in ${region}"
-  aws lambda add-layer-version-permission \
+  local perms_result
+  run_aws_with_infra_check \
+    aws lambda add-layer-version-permission \
     --layer-name ${layer_name} \
     --version-number "$layer_version" \
     --statement-id public \
     --action lambda:GetLayerVersion \
     --principal "*" \
-    --region "$region"
-  echo "Public permissions set for ${runtime_name} layer version ${layer_version} in region ${region}"
+    --region "$region" && perms_result=0 || perms_result=$?
 
+  if [[ $perms_result -eq 2 ]]; then
+    echo "WARNING: Layer ${runtime_name} v${layer_version} published to ${region} but permissions failed (AWS infra error)"
+    SKIPPED_REGIONS+=("${region} (${runtime_name} v${layer_version} - AddLayerVersionPermission failed)")
+    return 2
+  elif [[ $perms_result -ne 0 ]]; then
+    echo "FATAL: add-layer-version-permission failed for ${runtime_name} in ${region} — stopping"
+    return 1
+  fi
+
+  echo "Public permissions set for ${runtime_name} layer version ${layer_version} in region ${region}"
+  return 0
 }
 
 
@@ -299,7 +408,18 @@ function publish_layer {
     fi
 
     echo "Uploading ${layer_archive} to s3://${bucket_name}/${s3_key}"
-    aws --region "$region" s3 cp $layer_archive "s3://${bucket_name}/${s3_key}"
+    local s3_result
+    run_aws_with_infra_check \
+      aws --region "$region" s3 cp $layer_archive "s3://${bucket_name}/${s3_key}" && s3_result=0 || s3_result=$?
+
+    if [[ $s3_result -eq 2 ]]; then
+      echo "SKIPPING region ${region} for ${runtime_name} due to AWS infrastructure error during S3 upload"
+      SKIPPED_REGIONS+=("${region} (${runtime_name} - S3 upload failed)")
+      return 2
+    elif [[ $s3_result -ne 0 ]]; then
+      echo "FATAL: S3 upload failed for ${runtime_name} in ${region} — stopping"
+      return 1
+    fi
 
    if [[ ${REGIONS[*]} =~ $region ]];
    then arch_flag="--compatible-architectures $arch"
@@ -308,7 +428,7 @@ function publish_layer {
 
     base_description="New Relic Layer for ${runtime_name} (${arch})"
     extension_info=" with New Relic Extension v${EXTENSION_VERSION}"
-    
+
     if [[ $newrelic_agent_version != "none" ]]; then
         if [[ $agent_name != "provided" ]]; then
             agent_info=" and ${agent_name} agent v${newrelic_agent_version}"
@@ -333,8 +453,14 @@ function publish_layer {
         base_description="New Relic slim Layer without opentelemetry for ${runtime_name} (${arch})"
         description="${base_description}${extension_info}${agent_info}"
     fi
-    publish_public_layer $layer_name $bucket_name $s3_key "$description" "$arch_flag" "$region" "$runtime_name" "${compat_list[@]}"
 
+    local publish_result
+    publish_public_layer $layer_name $bucket_name $s3_key "$description" "$arch_flag" "$region" "$runtime_name" "${compat_list[@]}" && publish_result=0 || publish_result=$?
+
+    # Return code 2 = AWS infra error (region skipped, continue with others)
+    # Return code 1 = our error (credentials, params, etc. — stop immediately)
+    # Return code 0 = success
+    return $publish_result
 }
 
 
