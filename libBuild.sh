@@ -69,6 +69,8 @@ function run_aws_with_infra_check {
 # Report any regions that were skipped due to AWS infrastructure errors.
 # Automatically runs on script exit via trap — no need to call manually.
 function report_skipped_regions {
+  local original_exit=$?
+
   if [[ ${#SKIPPED_REGIONS[@]} -gt 0 ]]; then
     echo ""
     echo "========================================="
@@ -79,9 +81,12 @@ function report_skipped_regions {
     echo "These regions may need a manual re-publish once the AWS issues are resolved."
     echo "========================================="
     echo ""
-    # Exit 0 so that sibling matrix jobs are not cancelled by GitHub Actions fail-fast.
-    # The warning message above makes skipped regions visible in the logs.
-    exit 0
+  fi
+
+  # If the script exited due to a real error (exit 1), preserve that failure.
+  # Only exit 0 if the original exit was clean (all regions processed, some just skipped).
+  if [[ $original_exit -ne 0 ]]; then
+    exit $original_exit
   fi
 }
 
