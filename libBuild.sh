@@ -79,7 +79,9 @@ function report_skipped_regions {
     echo "These regions may need a manual re-publish once the AWS issues are resolved."
     echo "========================================="
     echo ""
-    exit 1
+    # Exit 0 so that sibling matrix jobs are not cancelled by GitHub Actions fail-fast.
+    # The warning message above makes skipped regions visible in the logs.
+    exit 0
   fi
 }
 
