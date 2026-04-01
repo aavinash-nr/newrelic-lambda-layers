@@ -1,0 +1,73 @@
+name: 'Slack Release Notification'
+description: 'Send a Slack notification with the result of a layer release'
+
+inputs:
+  layer-name:
+    description: 'Name of the layer (e.g., Node.js, Python, Ruby)'
+    required: true
+  layer-version:
+    description: 'Version of the layer (e.g., 20, 3.12). Leave empty for non-versioned layers.'
+    required: false
+    default: ''
+  job-status:
+    description: 'Status of the job: success, failure, or cancelled'
+    required: true
+  slack-webhook-url:
+    description: 'Slack Incoming Webhook URL'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Send Slack notification
+      uses: slackapi/slack-github-action@v2.1.0
+      with:
+        webhook: ${{ inputs.slack-webhook-url }}
+        webhook-type: incoming-webhook
+        payload: |
+          {
+            "blocks": [
+              {
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": "${{ inputs.job-status == 'success' && '✅ Layer Release Succeeded' || '❌ Layer Release Failed' }}",
+                  "emoji": true
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Layer:*\n${{ inputs.layer-name }}${{ inputs.layer-version != '' && format(' {0}', inputs.layer-version) || '' }}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Tag:*\n`${{ github.ref_name }}`"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Status:*\n${{ inputs.job-status }}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Triggered by:*\n${{ github.actor }}"
+                  }
+                ]
+              },
+              {
+                "type": "actions",
+                "elements": [
+                  {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "View Workflow Run"
+                    },
+                    "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  }
+                ]
+              }
+            ]
+          }

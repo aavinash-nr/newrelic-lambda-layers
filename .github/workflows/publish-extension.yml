@@ -34,3 +34,11 @@ jobs:
         run: |
           cd extension
           ./publish-layer.sh
+      - name: Notify Slack
+        if: always() && steps.extension-check-tag.outputs.match == 'true'
+        uses: ./.github/actions/slack-notify
+        with:
+          layer-name: Extension
+          layer-version: ''
+          job-status: ${{ job.status }}
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}

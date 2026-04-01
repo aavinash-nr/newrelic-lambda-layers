@@ -40,6 +40,14 @@ jobs:
          files: ./nodejs/coverage/unit/lcov.info
          fail_ci_if_error: true
          flags: unit-tests
+      - name: Notify Slack
+        if: always() && steps.setup.outputs.tag-match == 'true'
+        uses: ./.github/actions/slack-notify
+        with:
+          layer-name: Node.js
+          layer-version: ${{ matrix.node-version }}
+          job-status: ${{ job.status }}
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
 
   publish-node-universal:
     runs-on: ubuntu-latest
@@ -72,3 +80,11 @@ jobs:
          files: ./nodejs/coverage/unit/lcov.info
          fail_ci_if_error: true
          flags: unit-tests
+      - name: Notify Slack
+        if: always() && steps.setup.outputs.tag-match == 'true'
+        uses: ./.github/actions/slack-notify
+        with:
+          layer-name: Node.js Universal
+          layer-version: ''
+          job-status: ${{ job.status }}
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}

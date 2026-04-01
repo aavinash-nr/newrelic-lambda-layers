@@ -54,3 +54,11 @@ jobs:
         run: |
           cd java
           ./publish-layers.sh build-publish-${{ matrix.java-version }}-ecr-image
+      - name: Notify Slack
+        if: always() && steps.java-check-tag.outputs.match == 'true'
+        uses: ./.github/actions/slack-notify
+        with:
+          layer-name: Java
+          layer-version: ${{ matrix.java-version }}
+          job-status: ${{ job.status }}
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}

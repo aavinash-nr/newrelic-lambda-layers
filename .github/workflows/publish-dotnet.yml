@@ -29,3 +29,11 @@ jobs:
         run: |
           cd dotnet
           ./publish-layers.sh
+      - name: Notify Slack
+        if: always() && steps.dotnet-check-tag.outputs.match == 'true'
+        uses: ./.github/actions/slack-notify
+        with:
+          layer-name: .NET
+          layer-version: ''
+          job-status: ${{ job.status }}
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
