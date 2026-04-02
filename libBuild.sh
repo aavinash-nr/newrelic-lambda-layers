@@ -20,6 +20,10 @@ AWS_INFRA_ERRORS=(
   "EC2UnexpectedException"
   "KMSInternalException"
   "ProvisionedThroughputExceededException"
+  # S3 bucket not set up in this region — skip and surface in Slack
+  "NoSuchBucket"
+  # Bucket exists but our role has no access to it in this region
+  "AccessDenied"
 )
 
 # Checks if an AWS CLI error message contains an infrastructure error code.
