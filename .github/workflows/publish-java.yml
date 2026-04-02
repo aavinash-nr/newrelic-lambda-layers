@@ -38,12 +38,22 @@ jobs:
           if [[ "$GIT_REF" =~ ^refs/tags/v[0-9]+(\.[0-9]+)*_java$ ]]; then
             echo "match=true" >> $GITHUB_OUTPUT
           fi
+      - name: Pre-flight check (credentials + S3 buckets)
+        if: steps.check-tag.outputs.match == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BUCKET_NAME_PREFIX: ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
+        run: |
+          source libBuild.sh
+          preflight_check
       - name: Publish ${{ matrix.java-version }} layer
         id: publish
         if: steps.check-tag.outputs.match == 'true'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BUCKET_NAME_PREFIX: ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
         run: make publish-${{ matrix.java-version }}-ci
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -55,6 +65,7 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          ECR_REPO_NAME: ${{ vars.ECR_REPO_NAME || 'x6n7b2o2' }}
         run: |
           cd java
           ./publish-layers.sh build-publish-${{ matrix.java-version }}-ecr-image
@@ -108,7 +119,7 @@ jobs:
           fi
 
           SKIPPED_REGIONS=""
-          [[ -f /tmp/skipped-regions.txt ]] && SKIPPED_REGIONS=$(cat /tmp/skipped-regions.txt | tr '\n' ',')
+          [[ -f /tmp/layer-results/skipped-regions.txt ]] && SKIPPED_REGIONS=$(cat /tmp/layer-results/skipped-regions.txt | tr '\n' ',')
 
           {
             echo "label=Java ${JAVA_VERSION}"

@@ -82,10 +82,7 @@ function publish_python_layer {
         echo "Publishing layer for python${python_version} (${arch}) to region ${region}"
         local result
         publish_layer ${ZIP} $region python${python_version} ${arch} $NEWRELIC_AGENT_VERSION && result=0 || result=$?
-        if [[ $result -eq 1 ]]; then
-            echo "FATAL: Non-infrastructure error in ${region} — aborting publish"
-            exit 1
-        fi
+        # result=2 means region was skipped — continue to next
     done
 }
 
@@ -136,10 +133,7 @@ function publish_universal_python_layer {
         echo "Publishing universal Python layer (${arch}) to region ${region}"
         local result
         publish_layer ${ZIP} $region python ${arch} $NEWRELIC_AGENT_VERSION && result=0 || result=$?
-        if [[ $result -eq 1 ]]; then
-            echo "FATAL: Non-infrastructure error in ${region} — aborting publish"
-            exit 1
-        fi
+        # result=2 means region was skipped — continue to next
     done
 }
 

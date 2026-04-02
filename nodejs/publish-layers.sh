@@ -68,11 +68,7 @@ function publish_universal_wrapper {
     echo "Publishing universal Node.js layer (${arch}) to region ${region}"
     local result
     publish_layer $ZIP $region nodejs ${arch} $NEWRELIC_AGENT_VERSION $slim && result=0 || result=$?
-    if [[ $result -eq 1 ]]; then
-      echo "FATAL: Non-infrastructure error in ${region} — aborting publish"
-      exit 1
-    fi
-    # result=2 means AWS infra error — region was skipped, continue to next
+    # result=2 means region was skipped — continue to next
   done
 }
 
@@ -128,11 +124,7 @@ function publish_wrapper {
     echo "Publishing layer for nodejs${node_version}.x (${arch}) to region ${region}"
     local result
     publish_layer $ZIP $region nodejs${node_version}.x ${arch} $NEWRELIC_AGENT_VERSION $slim && result=0 || result=$?
-    if [[ $result -eq 1 ]]; then
-      echo "FATAL: Non-infrastructure error in ${region} — aborting publish"
-      exit 1
-    fi
-    # result=2 means AWS infra error — region was skipped, continue to next
+    # result=2 means region was skipped — continue to next
   done
 }
 

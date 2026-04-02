@@ -34,6 +34,15 @@ jobs:
         if: steps.check-tag.outputs.match == 'true'
         run: bundle
         working-directory: ruby
+      - name: Pre-flight check (credentials + S3 buckets)
+        if: steps.check-tag.outputs.match == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BUCKET_NAME_PREFIX: ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
+        run: |
+          source libBuild.sh
+          preflight_check
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
@@ -44,6 +53,7 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BUCKET_NAME_PREFIX: ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
         run: ./publish-layers.sh ruby${{ matrix.ruby-version }}
         working-directory: ruby
       - name: Validate published layer
@@ -88,7 +98,7 @@ jobs:
           fi
 
           SKIPPED_REGIONS=""
-          [[ -f /tmp/skipped-regions.txt ]] && SKIPPED_REGIONS=$(cat /tmp/skipped-regions.txt | tr '\n' ',')
+          [[ -f /tmp/layer-results/skipped-regions.txt ]] && SKIPPED_REGIONS=$(cat /tmp/layer-results/skipped-regions.txt | tr '\n' ',')
 
           {
             echo "label=Ruby ${RUBY_VERSION}"

@@ -39,7 +39,7 @@ function publish-dotnet-x86-64 {
     for region in "${REGIONS[@]}"; do
       local result
       publish_layer $DOTNET_DIST_X86_64 $region dotnet x86_64 $NEWRELIC_AGENT_VERSION && result=0 || result=$?
-      if [[ $result -eq 1 ]]; then exit 1; fi
+      # region skipped (result=2) — continue
     done
 
     publish_docker_ecr $DOTNET_DIST_X86_64 dotnet x86_64
@@ -66,7 +66,7 @@ function publish-dotnet-arm64 {
     for region in "${REGIONS[@]}"; do
       local result
       publish_layer $DOTNET_DIST_ARM64 $region dotnet arm64 $NEWRELIC_AGENT_VERSION && result=0 || result=$?
-      if [[ $result -eq 1 ]]; then exit 1; fi
+      # region skipped (result=2) — continue
     done
 
     publish_docker_ecr $DOTNET_DIST_ARM64 dotnet arm64

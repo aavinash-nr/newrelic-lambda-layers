@@ -9,6 +9,9 @@ publish-java8al2-ci: build-java8al2
 	docker run \
 		-e AWS_ACCESS_KEY_ID \
 		-e AWS_SECRET_ACCESS_KEY \
+		-e BUCKET_NAME_PREFIX \
+		-e ECR_REPO_NAME \
+		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-java8al2
 
 publish-java8al2-local: build-java8al2
@@ -28,6 +31,9 @@ publish-java11-ci: build-java11
 	docker run \
 		-e AWS_ACCESS_KEY_ID \
 		-e AWS_SECRET_ACCESS_KEY \
+		-e BUCKET_NAME_PREFIX \
+		-e ECR_REPO_NAME \
+		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-java11
 
 publish-java11-local: build-java11
@@ -47,6 +53,9 @@ publish-java17-ci: build-java17
 	docker run \
 		-e AWS_ACCESS_KEY_ID \
 		-e AWS_SECRET_ACCESS_KEY \
+		-e BUCKET_NAME_PREFIX \
+		-e ECR_REPO_NAME \
+		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-java17
 
 publish-java17-local: build-java17
@@ -66,6 +75,9 @@ publish-java21-ci: build-java21
 	docker run \
 		-e AWS_ACCESS_KEY_ID \
 		-e AWS_SECRET_ACCESS_KEY \
+		-e BUCKET_NAME_PREFIX \
+		-e ECR_REPO_NAME \
+		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-java21
 
 publish-java21-local: build-java21
@@ -85,6 +97,9 @@ publish-nodejs20-ci: build-nodejs20
 	docker run \
 		-e AWS_ACCESS_KEY_ID \
 		-e AWS_SECRET_ACCESS_KEY \
+		-e BUCKET_NAME_PREFIX \
+		-e ECR_REPO_NAME \
+		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-nodejs20
 
 publish-nodejs20-local: build-nodejs20
@@ -104,6 +119,9 @@ publish-nodejs22-ci: build-nodejs22
 	docker run \
 		-e AWS_ACCESS_KEY_ID \
 		-e AWS_SECRET_ACCESS_KEY \
+		-e BUCKET_NAME_PREFIX \
+		-e ECR_REPO_NAME \
+		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-nodejs22
 
 publish-nodejs22-local: build-nodejs22
@@ -123,6 +141,9 @@ publish-nodejs24-ci: build-nodejs24
 	docker run \
 		-e AWS_ACCESS_KEY_ID \
 		-e AWS_SECRET_ACCESS_KEY \
+		-e BUCKET_NAME_PREFIX \
+		-e ECR_REPO_NAME \
+		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-nodejs24
 
 publish-nodejs24-local: build-nodejs24
@@ -142,6 +163,9 @@ publish-python-universal-ci: build-python-universal
 	docker run \
 		-e AWS_ACCESS_KEY_ID \
 		-e AWS_SECRET_ACCESS_KEY \
+		-e BUCKET_NAME_PREFIX \
+		-e ECR_REPO_NAME \
+		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-python
 
 publish-python-universal-local: build-python-universal
@@ -161,6 +185,9 @@ publish-nodejs-universal-ci: build-nodejs-universal
 	docker run \
 		-e AWS_ACCESS_KEY_ID \
 		-e AWS_SECRET_ACCESS_KEY \
+		-e BUCKET_NAME_PREFIX \
+		-e ECR_REPO_NAME \
+		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-nodejs
 
 publish-nodejs-universal-local: build-nodejs-universal
@@ -180,6 +207,9 @@ publish-ruby32-ci: build-ruby32
 	docker run \
 		-e AWS_ACCESS_KEY_ID \
 		-e AWS_SECRET_ACCESS_KEY \
+		-e BUCKET_NAME_PREFIX \
+		-e ECR_REPO_NAME \
+		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-ruby32
 
 publish-ruby32-local: build-ruby32
@@ -199,6 +229,9 @@ publish-ruby33-ci: build-ruby33
 	docker run \
 		-e AWS_ACCESS_KEY_ID \
 		-e AWS_SECRET_ACCESS_KEY \
+		-e BUCKET_NAME_PREFIX \
+		-e ECR_REPO_NAME \
+		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-ruby33
 
 publish-ruby33-local: build-ruby33
@@ -218,6 +251,9 @@ publish-ruby34-ci: build-ruby34
 	docker run \
 		-e AWS_ACCESS_KEY_ID \
 		-e AWS_SECRET_ACCESS_KEY \
+		-e BUCKET_NAME_PREFIX \
+		-e ECR_REPO_NAME \
+		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-ruby34
 
 publish-ruby34-local: build-ruby34

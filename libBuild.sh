@@ -2,54 +2,19 @@
 
 set -Eeuo pipefail
 
-# Tracks regions that were skipped due to AWS infrastructure errors
+# S3 bucket naming: one bucket per region, named "${BUCKET_NAME_PREFIX}-${region}"
+# Override via GitHub repo variable BUCKET_NAME_PREFIX for testing
+BUCKET_NAME_PREFIX="${BUCKET_NAME_PREFIX:-nr-layers}"
+
+# Tracks regions that were skipped (pre-flight failures or publish-time failures)
 SKIPPED_REGIONS=()
+# Regions that failed pre-flight — never attempted during publish
+PREFLIGHT_SKIP=()
 
-# AWS error codes that indicate infrastructure/service-side issues.
-# These are NOT our fault — safe to skip the region and continue.
-AWS_INFRA_ERRORS=(
-  "InternalFailure"
-  "InternalError"
-  "InternalServerError"
-  "ServiceException"
-  "ServiceUnavailableException"
-  "RequestTimeout"
-  "RequestTimeoutException"
-  "ThrottlingException"
-  "TooManyRequestsException"
-  "EC2UnexpectedException"
-  "KMSInternalException"
-  "ProvisionedThroughputExceededException"
-  # S3 bucket not set up in this region — skip and surface in Slack
-  "NoSuchBucket"
-  # Bucket exists but our role has no access to it in this region
-  "AccessDenied"
-  # Region exists in AWS but is not opted-in / enabled for this account
-  "OptInRequired"
-  # Disabled regions return InvalidAccessKeyId because their STS endpoint is inactive.
-  # Safe to add here ONLY because check_aws_credentials() validates credentials upfront.
-  "InvalidAccessKeyId"
-)
-
-# Checks if an AWS CLI error message contains an infrastructure error code.
-# Returns 0 (true) if it's an AWS infra error, 1 (false) otherwise.
-function is_aws_infra_error {
-  local error_output="$1"
-
-  for err_code in "${AWS_INFRA_ERRORS[@]}"; do
-    if echo "$error_output" | grep -q "(${err_code})"; then
-      return 0
-    fi
-  done
-
-  return 1
-}
-
-# Runs an AWS CLI command with infrastructure error detection.
-# If the command fails due to an AWS infra error, returns exit code 2.
-# If it fails for any other reason (credentials, params, etc.), returns exit code 1.
+# Runs an AWS CLI command for a specific region.
+# Any failure is treated as a regional issue — exit code 2 (skip this region).
 # On success, returns 0.
-function run_aws_with_infra_check {
+function run_aws_for_region {
   local output
   local exit_code
 
@@ -60,41 +25,65 @@ function run_aws_with_infra_check {
     return 0
   fi
 
-  # Sanitize output: strip any line that might contain sensitive key/token info
   local safe_output
   safe_output=$(echo "$output" | grep -vi -E "(secret|password|token|credential)" || true)
-
-  if is_aws_infra_error "$output"; then
-    echo "WARNING: AWS infrastructure error detected:" >&2
-    echo "$safe_output" >&2
-    return 2
-  else
-    echo "ERROR: AWS command failed:" >&2
-    echo "$safe_output" >&2
-    return 1
-  fi
+  echo "WARNING: AWS command failed for region — will skip:" >&2
+  echo "$safe_output" >&2
+  return 2
 }
 
-# Checked once on the first call to publish_layer — never called again.
-# This is what makes it safe to treat InvalidAccessKeyId as a skippable
-# infra error: disabled regions return that code, but only after we've
-# already confirmed credentials are valid globally via STS.
-_CREDENTIALS_CHECKED=false
+# Returns 0 if the region should be skipped (failed pre-flight).
+function region_should_skip {
+  local region="$1"
+  for r in "${PREFLIGHT_SKIP[@]}"; do
+    [[ "$r" == "$region" ]] && return 0
+  done
+  return 1
+}
 
-function check_aws_credentials {
-  [[ "$_CREDENTIALS_CHECKED" == "true" ]] && return 0
-  local output
-  output=$(aws sts get-caller-identity 2>&1) || {
+# Pre-flight checks run ONCE before any publishing begins:
+#   1. Validate AWS credentials (fatal — if this fails nothing will work)
+#   2. For each region: verify the S3 bucket exists and is accessible
+# Regions that fail pre-flight are added to PREFLIGHT_SKIP so they are
+# never attempted, and the reason is surfaced in Slack via SKIPPED_REGIONS.
+function preflight_check {
+  echo "=== Pre-flight checks ==="
+
+  # 1. Credentials — fatal if invalid
+  local caller_identity
+  caller_identity=$(aws sts get-caller-identity 2>&1) || {
     echo "FATAL: AWS credentials are invalid or missing." >&2
-    echo "$output" >&2
+    echo "$caller_identity" >&2
     exit 1
   }
-  echo "AWS credentials validated: $(echo "$output" | jq -r '.Arn' 2>/dev/null || echo "OK")"
-  _CREDENTIALS_CHECKED=true
+  echo "Credentials OK: $(echo "$caller_identity" | jq -r '.Arn' 2>/dev/null || echo "validated")"
+
+  # 2. Per-region S3 bucket check
+  local region
+  for region in "${REGIONS[@]}"; do
+    local bucket="${BUCKET_NAME_PREFIX}-${region}"
+    local check_output
+    check_output=$(aws s3api head-bucket --bucket "$bucket" --region "$region" 2>&1) && {
+      echo "  [OK]   ${region} — s3://${bucket} accessible"
+    } || {
+      local safe_output
+      safe_output=$(echo "$check_output" | grep -vi -E "(secret|password|token|credential)" || true)
+      echo "  [SKIP] ${region} — ${safe_output}"
+      PREFLIGHT_SKIP+=("$region")
+      SKIPPED_REGIONS+=("${region} (pre-flight: s3://${bucket} not accessible)")
+    }
+  done
+
+  local skip_count=${#PREFLIGHT_SKIP[@]}
+  local total=${#REGIONS[@]}
+  echo "Pre-flight complete: $(( total - skip_count ))/${total} regions ready, ${skip_count} skipped"
+  echo "========================="
 }
 
 # Report any regions that were skipped due to AWS infrastructure errors.
-# Writes to /tmp/skipped-regions.txt so CI workflows can surface them in Slack.
+# Writes to /tmp/layer-results/skipped-regions.txt so CI workflows can surface
+# them in Slack. In CI the publish step mounts /tmp/layer-results from the runner
+# so this file is visible to subsequent workflow steps.
 # Automatically runs on script exit via trap — no need to call manually.
 function report_skipped_regions {
   local original_exit=$?
@@ -102,10 +91,11 @@ function report_skipped_regions {
   if [[ ${#SKIPPED_REGIONS[@]} -gt 0 ]]; then
     echo ""
     echo "========================================="
-    echo "WARNING: The following regions were SKIPPED due to AWS infrastructure errors:"
+    echo "WARNING: The following regions were SKIPPED:"
+    mkdir -p /tmp/layer-results
     for entry in "${SKIPPED_REGIONS[@]}"; do
       echo "  - ${entry}"
-      echo "${entry}" >> /tmp/skipped-regions.txt
+      echo "${entry}" >> /tmp/layer-results/skipped-regions.txt
     done
     echo "These regions may need a manual re-publish once the AWS issues are resolved."
     echo "========================================="
@@ -361,8 +351,7 @@ function publish_public_layer {
 
   local layer_version
   local publish_result
-
-  layer_version=$(run_aws_with_infra_check \
+  layer_version=$(run_aws_for_region \
     aws lambda publish-layer-version \
     --layer-name ${layer_name} \
     --content "S3Bucket=${bucket_name},S3Key=${s3_key}" \
@@ -373,20 +362,17 @@ function publish_public_layer {
     --output text \
     --query Version) && publish_result=0 || publish_result=$?
 
-  if [[ $publish_result -eq 2 ]]; then
-    echo "SKIPPING region ${region} for ${runtime_name} due to AWS infrastructure error"
+  if [[ $publish_result -ne 0 ]]; then
+    echo "SKIPPING region ${region} for ${runtime_name} — PublishLayerVersion failed"
     SKIPPED_REGIONS+=("${region} (${runtime_name} - PublishLayerVersion failed)")
     return 2
-  elif [[ $publish_result -ne 0 ]]; then
-    echo "FATAL: publish-layer-version failed for ${runtime_name} in ${region} — stopping"
-    return 1
   fi
 
   echo "Published ${runtime_name} layer version ${layer_version} to ${region}"
 
   echo "Setting public permissions for ${runtime_name} layer version ${layer_version} in ${region}"
   local perms_result
-  run_aws_with_infra_check \
+  run_aws_for_region \
     aws lambda add-layer-version-permission \
     --layer-name ${layer_name} \
     --version-number "$layer_version" \
@@ -395,13 +381,10 @@ function publish_public_layer {
     --principal "*" \
     --region "$region" && perms_result=0 || perms_result=$?
 
-  if [[ $perms_result -eq 2 ]]; then
-    echo "WARNING: Layer ${runtime_name} v${layer_version} published to ${region} but permissions failed (AWS infra error)"
+  if [[ $perms_result -ne 0 ]]; then
+    echo "SKIPPING region ${region} for ${runtime_name} v${layer_version} — AddLayerVersionPermission failed"
     SKIPPED_REGIONS+=("${region} (${runtime_name} v${layer_version} - AddLayerVersionPermission failed)")
     return 2
-  elif [[ $perms_result -ne 0 ]]; then
-    echo "FATAL: add-layer-version-permission failed for ${runtime_name} in ${region} — stopping"
-    return 1
   fi
 
   echo "Public permissions set for ${runtime_name} layer version ${layer_version} in region ${region}"
@@ -409,20 +392,34 @@ function publish_public_layer {
 }
 
 
+_PREFLIGHT_DONE=false
+
 function publish_layer {
-    check_aws_credentials
+    # Run pre-flight once before the first publish attempt
+    if [[ "$_PREFLIGHT_DONE" == "false" ]]; then
+      preflight_check
+      _PREFLIGHT_DONE=true
+    fi
+
     layer_archive=$1
     region=$2
     runtime_name=$3
     arch=$4
     newrelic_agent_version=${5:-"none"}
     slim=${6:-""}
+
+    # Skip regions that already failed pre-flight
+    if region_should_skip "$region"; then
+      echo "SKIPPING region ${region} — failed pre-flight check"
+      return 2
+    fi
+
     agent_name=$( agent_name_str $runtime_name )
     layer_name=$( layer_name_str $runtime_name $arch )
 
     hash=$( hash_file $layer_archive | awk '{ print $1 }' )
 
-    bucket_name="nr-test-saket-layers-${region}"
+    bucket_name="${BUCKET_NAME_PREFIX}-${region}"
     s3_key="$( s3_prefix $runtime_name )/${hash}.${arch}.zip"
 
     compat_list=( $runtime_name )
@@ -444,16 +441,13 @@ function publish_layer {
 
     echo "Uploading ${layer_archive} to s3://${bucket_name}/${s3_key}"
     local s3_result
-    run_aws_with_infra_check \
+    run_aws_for_region \
       aws --region "$region" s3 cp $layer_archive "s3://${bucket_name}/${s3_key}" && s3_result=0 || s3_result=$?
 
-    if [[ $s3_result -eq 2 ]]; then
-      echo "SKIPPING region ${region} for ${runtime_name} due to AWS infrastructure error during S3 upload"
+    if [[ $s3_result -ne 0 ]]; then
+      echo "SKIPPING region ${region} for ${runtime_name} — S3 upload failed"
       SKIPPED_REGIONS+=("${region} (${runtime_name} - S3 upload failed)")
       return 2
-    elif [[ $s3_result -ne 0 ]]; then
-      echo "FATAL: S3 upload failed for ${runtime_name} in ${region} — stopping"
-      return 1
     fi
 
    if [[ ${REGIONS[*]} =~ $region ]];
@@ -546,9 +540,8 @@ function publish_docker_ecr {
       echo "File does not start with 'dist/': $file_without_dist"
     fi
 
-    # public ecr repository name #x6n7b2o2
-    # maintainer can use this("q6k3q1g1") repo name for testing
-    repository="q6k3q1g1"
+    # Override via GitHub repo variable ECR_REPO_NAME for testing (e.g. q6k3q1g1)
+    repository="${ECR_REPO_NAME:-x6n7b2o2}"
 
     # copy dockerfile
     cp ../Dockerfile.ecrImage .

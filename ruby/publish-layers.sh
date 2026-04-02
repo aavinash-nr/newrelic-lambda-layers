@@ -179,7 +179,7 @@ function publish_ruby_for_arch {
     echo "Publishing $dist_file for region=$region, ruby=$ruby_version, arch=$arch"
     local result
     publish_layer $dist_file $region "ruby${ruby_version}" $arch $NEWRELIC_AGENT_VERSION && result=0 || result=$?
-    if [[ $result -eq 1 ]]; then exit 1; fi
+    # region skipped (result=2) — continue
   done
   echo 'Publishing complete'
 }

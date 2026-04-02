@@ -17,6 +17,15 @@ jobs:
       - name: Setup
         id: setup
         uses: ./.github/actions/python-layer-setup
+      - name: Pre-flight check (credentials + S3 buckets)
+        if: steps.setup.outputs.tag-match == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BUCKET_NAME_PREFIX: ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
+        run: |
+          source libBuild.sh
+          preflight_check
       - name: Publish Python ${{ matrix.python-version }} layer
         id: publish
         if: steps.setup.outputs.tag-match == 'true'
@@ -68,7 +77,7 @@ jobs:
           fi
 
           SKIPPED_REGIONS=""
-          [[ -f /tmp/skipped-regions.txt ]] && SKIPPED_REGIONS=$(cat /tmp/skipped-regions.txt | tr '\n' ',')
+          [[ -f /tmp/layer-results/skipped-regions.txt ]] && SKIPPED_REGIONS=$(cat /tmp/layer-results/skipped-regions.txt | tr '\n' ',')
 
           {
             echo "label=Python ${PYTHON_VERSION}"
@@ -92,6 +101,15 @@ jobs:
       - name: Setup
         id: setup
         uses: ./.github/actions/python-layer-setup
+      - name: Pre-flight check (credentials + S3 buckets)
+        if: steps.setup.outputs.tag-match == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BUCKET_NAME_PREFIX: ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
+        run: |
+          source libBuild.sh
+          preflight_check
       - name: Publish universal Python layer
         id: publish
         if: steps.setup.outputs.tag-match == 'true'
@@ -138,7 +156,7 @@ jobs:
           fi
 
           SKIPPED_REGIONS=""
-          [[ -f /tmp/skipped-regions.txt ]] && SKIPPED_REGIONS=$(cat /tmp/skipped-regions.txt | tr '\n' ',')
+          [[ -f /tmp/layer-results/skipped-regions.txt ]] && SKIPPED_REGIONS=$(cat /tmp/layer-results/skipped-regions.txt | tr '\n' ',')
 
           {
             echo "label=Python Universal"
