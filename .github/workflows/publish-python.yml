@@ -9,14 +9,16 @@ jobs:
   publish-python:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: [ '3.9', '3.10', '3.11', '3.12', '3.13', '3.14' ]
+        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
       - uses: actions/checkout@v4
       - name: Setup
         id: setup
         uses: ./.github/actions/python-layer-setup
       - name: Publish Python ${{ matrix.python-version }} layer
+        id: publish
         if: steps.setup.outputs.tag-match == 'true'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -24,14 +26,60 @@ jobs:
         run: |
           cd python
           ./publish-layers.sh python${{ matrix.python-version }}
-      - name: Notify Slack
+      - name: Validate published layer
+        id: validate
+        if: steps.setup.outputs.tag-match == 'true' && steps.publish.outcome == 'success'
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          PYTHON_VERSION:        ${{ matrix.python-version }}
+        run: |
+          # Map 3.9 → Python39, 3.10 → Python310 etc.
+          LAYER_SUFFIX=$(echo "$PYTHON_VERSION" | tr -d '.')
+          LAYER_NAME="NewRelicPython${LAYER_SUFFIX}"
+          LAYER_VERSION=$(aws lambda list-layer-versions \
+            --layer-name "$LAYER_NAME" \
+            --region us-east-1 \
+            --query 'LayerVersions[0].Version' \
+            --output text) || true
+          if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
+            echo "::error::Layer validation failed: $LAYER_NAME not found in us-east-1 after publish"
+            exit 1
+          fi
+          echo "Layer validated: $LAYER_NAME v${LAYER_VERSION}"
+          echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
+      - name: Write job result to artifact
         if: always() && steps.setup.outputs.tag-match == 'true'
-        uses: ./.github/actions/slack-notify
+        env:
+          PYTHON_VERSION:    ${{ matrix.python-version }}
+          JOB_STATUS:        ${{ job.status }}
+          PUBLISH_OUTCOME:   ${{ steps.publish.outcome }}
+          VALIDATE_OUTCOME:  ${{ steps.validate.outcome }}
+          PUBLISHED_VERSION: ${{ steps.validate.outputs.published-version }}
+        run: |
+          mkdir -p /tmp/layer-results
+
+          if [[ "$PUBLISH_OUTCOME" == "failure" ]]; then
+            REASON="Layer publish to AWS failed"
+          elif [[ "$VALIDATE_OUTCOME" == "failure" ]]; then
+            REASON="Post-publish validation failed — layer not accessible in AWS"
+          elif [[ "$JOB_STATUS" != "success" ]]; then
+            REASON="Setup step failed"
+          fi
+
+          {
+            echo "label=Python ${PYTHON_VERSION}"
+            echo "status=${JOB_STATUS}"
+            echo "version=${PUBLISHED_VERSION}"
+            echo "reason=${REASON:-}"
+          } > "/tmp/layer-results/python-${PYTHON_VERSION}.txt"
+      - name: Upload result artifact
+        if: always() && steps.setup.outputs.tag-match == 'true'
+        uses: actions/upload-artifact@v4
         with:
-          layer-name: Python
-          layer-version: ${{ matrix.python-version }}
-          job-status: ${{ job.status }}
-          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          name: layer-result-python-${{ matrix.python-version }}
+          path: /tmp/layer-results/python-${{ matrix.python-version }}.txt
+          retention-days: 1
 
   publish-python-universal:
     runs-on: ubuntu-latest
@@ -41,6 +89,7 @@ jobs:
         id: setup
         uses: ./.github/actions/python-layer-setup
       - name: Publish universal Python layer
+        id: publish
         if: steps.setup.outputs.tag-match == 'true'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -48,11 +97,141 @@ jobs:
         run: |
           cd python
           ./publish-layers.sh python
-      - name: Notify Slack
+      - name: Validate published layer
+        id: validate
+        if: steps.setup.outputs.tag-match == 'true' && steps.publish.outcome == 'success'
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          LAYER_VERSION=$(aws lambda list-layer-versions \
+            --layer-name NewRelicPython \
+            --region us-east-1 \
+            --query 'LayerVersions[0].Version' \
+            --output text) || true
+          if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
+            echo "::error::Layer validation failed: NewRelicPython not found in us-east-1 after publish"
+            exit 1
+          fi
+          echo "Layer validated: NewRelicPython v${LAYER_VERSION}"
+          echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
+      - name: Write job result to artifact
         if: always() && steps.setup.outputs.tag-match == 'true'
-        uses: ./.github/actions/slack-notify
+        env:
+          JOB_STATUS:        ${{ job.status }}
+          PUBLISH_OUTCOME:   ${{ steps.publish.outcome }}
+          VALIDATE_OUTCOME:  ${{ steps.validate.outcome }}
+          PUBLISHED_VERSION: ${{ steps.validate.outputs.published-version }}
+        run: |
+          mkdir -p /tmp/layer-results
+
+          if [[ "$PUBLISH_OUTCOME" == "failure" ]]; then
+            REASON="Layer publish to AWS failed"
+          elif [[ "$VALIDATE_OUTCOME" == "failure" ]]; then
+            REASON="Post-publish validation failed — layer not accessible in AWS"
+          elif [[ "$JOB_STATUS" != "success" ]]; then
+            REASON="Setup step failed"
+          fi
+
+          {
+            echo "label=Python Universal"
+            echo "status=${JOB_STATUS}"
+            echo "version=${PUBLISHED_VERSION}"
+            echo "reason=${REASON:-}"
+          } > /tmp/layer-results/python-universal.txt
+      - name: Upload result artifact
+        if: always() && steps.setup.outputs.tag-match == 'true'
+        uses: actions/upload-artifact@v4
         with:
-          layer-name: Python Universal
-          layer-version: ''
-          job-status: ${{ job.status }}
-          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          name: layer-result-python-universal
+          path: /tmp/layer-results/python-universal.txt
+          retention-days: 1
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [publish-python, publish-python-universal]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all result artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: layer-result-python-*
+          merge-multiple: true
+          path: /tmp/layer-results
+      - name: Build and send aggregated Slack notification
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GH_REF_NAME:   ${{ github.ref_name }}
+          GH_ACTOR:      ${{ github.actor }}
+          RUN_URL:       ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          OVERALL="success"
+          RESULTS_TEXT=""
+          FAILED_COUNT=0
+          TOTAL_COUNT=0
+
+          for f in $(ls /tmp/layer-results/*.txt 2>/dev/null | sort); do
+            [[ -f "$f" ]] || continue
+            TOTAL_COUNT=$((TOTAL_COUNT + 1))
+
+            label=$(grep '^label=' "$f" | cut -d= -f2-)
+            status=$(grep '^status=' "$f" | cut -d= -f2-)
+            version=$(grep '^version=' "$f" | cut -d= -f2-)
+            reason=$(grep '^reason=' "$f" | cut -d= -f2-)
+
+            if [[ "$status" == "success" ]]; then
+              [[ -n "$version" ]] \
+                && RESULTS_TEXT+="✅ ${label} (v${version})\n" \
+                || RESULTS_TEXT+="✅ ${label}\n"
+            else
+              OVERALL="failure"
+              FAILED_COUNT=$((FAILED_COUNT + 1))
+              [[ -n "$reason" ]] \
+                && RESULTS_TEXT+="❌ ${label} — ${reason}\n" \
+                || RESULTS_TEXT+="❌ ${label} — ${status}\n"
+            fi
+          done
+
+          if [[ "$OVERALL" == "success" ]]; then
+            HEADER="✅ Python Layer Release Succeeded"
+          else
+            HEADER="❌ Python Layer Release Failed (${FAILED_COUNT}/${TOTAL_COUNT} versions failed)"
+          fi
+
+          # When all jobs failed, add a direct link block to the workflow run
+          EXTRA_BLOCKS="[]"
+          if [[ "$FAILED_COUNT" -eq "$TOTAL_COUNT" && "$TOTAL_COUNT" -gt 0 ]]; then
+            EXTRA_BLOCKS=$(jq -n --arg url "$RUN_URL" \
+              '[{ type: "section", text: { type: "mrkdwn", text: ("⚠️ All versions failed. <" + $url + "|View full logs here>.") } }]')
+          fi
+
+          PAYLOAD=$(jq -n \
+            --arg header "$HEADER" \
+            --arg ref_name "$GH_REF_NAME" \
+            --arg actor "$GH_ACTOR" \
+            --arg results "$(echo -e "$RESULTS_TEXT")" \
+            --arg run_url "$RUN_URL" \
+            --argjson extra_blocks "$EXTRA_BLOCKS" \
+            '{
+              blocks: [
+                { type: "header", text: { type: "plain_text", text: $header, emoji: true } },
+                {
+                  type: "section",
+                  fields: [
+                    { type: "mrkdwn", text: ("*Tag:*\n`" + $ref_name + "`") },
+                    { type: "mrkdwn", text: ("*Triggered by:*\n" + $actor) }
+                  ]
+                },
+                { type: "section", text: { type: "mrkdwn", text: ("*Layer Results:*\n" + $results) } }
+              ] + $extra_blocks + [
+                {
+                  type: "actions",
+                  elements: [{ type: "button", text: { type: "plain_text", text: "View Workflow Run" }, url: $run_url }]
+                }
+              ]
+            }')
+
+          curl -sf -X POST "$SLACK_WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d "$PAYLOAD"

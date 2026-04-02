@@ -9,6 +9,7 @@ jobs:
   publish-ruby:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         ruby-version: [3.2, 3.3, 3.4]
     steps:
@@ -18,39 +19,172 @@ jobs:
         with:
           ruby-version: ${{ matrix.ruby-version }}
       - name: Check Tag
-        id: ruby-check-tag
+        id: check-tag
+        env:
+          GIT_REF: ${{ github.event.ref }}
         run: |
-          if [[ ${{ github.event.ref }} =~ ^refs/tags/v[0-9]+(\.[0-9]+)*_ruby$ ]]; then
-              echo "match=true" >> $GITHUB_OUTPUT
+          if [[ "$GIT_REF" =~ ^refs/tags/v[0-9]+(\.[0-9]+)*_ruby$ ]]; then
+            echo "match=true" >> $GITHUB_OUTPUT
           fi
       - name: Clean the workspace
+        if: steps.check-tag.outputs.match == 'true'
         run: ./bin/clean
         working-directory: ruby
       - name: Install Ruby Dependencies
+        if: steps.check-tag.outputs.match == 'true'
         run: bundle
         working-directory: ruby
-      - name: Obtain Ruby version without the dot
-        id: ruby-version-without-dot
-        run: >-
-          echo "::set-output name=VERSION::$(
-            echo ${{ matrix.ruby-version }} | sed 's/\.//'
-          )"
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64, amd64
       - name: Build and Publish layer
-        if: steps.ruby-check-tag.outputs.match == 'true'
+        id: publish
+        if: steps.check-tag.outputs.match == 'true'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: ./publish-layers.sh ruby${{ matrix.ruby-version }}
         working-directory: ruby
-      - name: Notify Slack
-        if: always() && steps.ruby-check-tag.outputs.match == 'true'
-        uses: ./.github/actions/slack-notify
+      - name: Validate published layer
+        id: validate
+        if: steps.check-tag.outputs.match == 'true' && steps.publish.outcome == 'success'
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          RUBY_VERSION:          ${{ matrix.ruby-version }}
+        run: |
+          # Map 3.2 → Ruby32, 3.3 → Ruby33 etc.
+          LAYER_SUFFIX=$(echo "$RUBY_VERSION" | tr -d '.')
+          LAYER_NAME="NewRelicRuby${LAYER_SUFFIX}"
+          LAYER_VERSION=$(aws lambda list-layer-versions \
+            --layer-name "$LAYER_NAME" \
+            --region us-east-1 \
+            --query 'LayerVersions[0].Version' \
+            --output text) || true
+          if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
+            echo "::error::Layer validation failed: $LAYER_NAME not found in us-east-1 after publish"
+            exit 1
+          fi
+          echo "Layer validated: $LAYER_NAME v${LAYER_VERSION}"
+          echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
+      - name: Write job result to artifact
+        if: always() && steps.check-tag.outputs.match == 'true'
+        env:
+          RUBY_VERSION:      ${{ matrix.ruby-version }}
+          JOB_STATUS:        ${{ job.status }}
+          PUBLISH_OUTCOME:   ${{ steps.publish.outcome }}
+          VALIDATE_OUTCOME:  ${{ steps.validate.outcome }}
+          PUBLISHED_VERSION: ${{ steps.validate.outputs.published-version }}
+        run: |
+          mkdir -p /tmp/layer-results
+
+          if [[ "$PUBLISH_OUTCOME" == "failure" ]]; then
+            REASON="Layer publish to AWS failed"
+          elif [[ "$VALIDATE_OUTCOME" == "failure" ]]; then
+            REASON="Post-publish validation failed — layer not accessible in AWS"
+          elif [[ "$JOB_STATUS" != "success" ]]; then
+            REASON="Build or setup step failed"
+          fi
+
+          {
+            echo "label=Ruby ${RUBY_VERSION}"
+            echo "status=${JOB_STATUS}"
+            echo "version=${PUBLISHED_VERSION}"
+            echo "reason=${REASON:-}"
+          } > "/tmp/layer-results/ruby-${RUBY_VERSION}.txt"
+      - name: Upload result artifact
+        if: always() && steps.check-tag.outputs.match == 'true'
+        uses: actions/upload-artifact@v4
         with:
-          layer-name: Ruby
-          layer-version: ${{ matrix.ruby-version }}
-          job-status: ${{ job.status }}
-          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          name: layer-result-ruby-${{ matrix.ruby-version }}
+          path: /tmp/layer-results/ruby-${{ matrix.ruby-version }}.txt
+          retention-days: 1
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [publish-ruby]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all result artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: layer-result-ruby-*
+          merge-multiple: true
+          path: /tmp/layer-results
+      - name: Build and send aggregated Slack notification
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GH_REF_NAME:   ${{ github.ref_name }}
+          GH_ACTOR:      ${{ github.actor }}
+          RUN_URL:       ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          OVERALL="success"
+          RESULTS_TEXT=""
+          FAILED_COUNT=0
+          TOTAL_COUNT=0
+
+          for f in $(ls /tmp/layer-results/*.txt 2>/dev/null | sort); do
+            [[ -f "$f" ]] || continue
+            TOTAL_COUNT=$((TOTAL_COUNT + 1))
+
+            label=$(grep '^label=' "$f" | cut -d= -f2-)
+            status=$(grep '^status=' "$f" | cut -d= -f2-)
+            version=$(grep '^version=' "$f" | cut -d= -f2-)
+            reason=$(grep '^reason=' "$f" | cut -d= -f2-)
+
+            if [[ "$status" == "success" ]]; then
+              [[ -n "$version" ]] \
+                && RESULTS_TEXT+="✅ ${label} (v${version})\n" \
+                || RESULTS_TEXT+="✅ ${label}\n"
+            else
+              OVERALL="failure"
+              FAILED_COUNT=$((FAILED_COUNT + 1))
+              [[ -n "$reason" ]] \
+                && RESULTS_TEXT+="❌ ${label} — ${reason}\n" \
+                || RESULTS_TEXT+="❌ ${label} — ${status}\n"
+            fi
+          done
+
+          if [[ "$OVERALL" == "success" ]]; then
+            HEADER="✅ Ruby Layer Release Succeeded"
+          else
+            HEADER="❌ Ruby Layer Release Failed (${FAILED_COUNT}/${TOTAL_COUNT} versions failed)"
+          fi
+
+          EXTRA_BLOCKS="[]"
+          if [[ "$FAILED_COUNT" -eq "$TOTAL_COUNT" && "$TOTAL_COUNT" -gt 0 ]]; then
+            EXTRA_BLOCKS=$(jq -n --arg url "$RUN_URL" \
+              '[{ type: "section", text: { type: "mrkdwn", text: ("⚠️ All versions failed. <" + $url + "|View full logs here>.") } }]')
+          fi
+
+          PAYLOAD=$(jq -n \
+            --arg header "$HEADER" \
+            --arg ref_name "$GH_REF_NAME" \
+            --arg actor "$GH_ACTOR" \
+            --arg results "$(echo -e "$RESULTS_TEXT")" \
+            --arg run_url "$RUN_URL" \
+            --argjson extra_blocks "$EXTRA_BLOCKS" \
+            '{
+              blocks: [
+                { type: "header", text: { type: "plain_text", text: $header, emoji: true } },
+                {
+                  type: "section",
+                  fields: [
+                    { type: "mrkdwn", text: ("*Tag:*\n`" + $ref_name + "`") },
+                    { type: "mrkdwn", text: ("*Triggered by:*\n" + $actor) }
+                  ]
+                },
+                { type: "section", text: { type: "mrkdwn", text: ("*Layer Results:*\n" + $results) } }
+              ] + $extra_blocks + [
+                {
+                  type: "actions",
+                  elements: [{ type: "button", text: { type: "plain_text", text: "View Workflow Run" }, url: $run_url }]
+                }
+              ]
+            }')
+
+          curl -sf -X POST "$SLACK_WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d "$PAYLOAD"

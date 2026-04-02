@@ -9,9 +9,9 @@ jobs:
   publish-java:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        java-version: [ java8al2, java11, java17, java21 ]
-
+        java-version: [java8al2, java11, java17, java21]
     steps:
       - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # pin@v4
       - name: Set up Java version
@@ -28,16 +28,19 @@ jobs:
       - name: Use Java ${{ env.JAVA_NUMERIC_VERSION }}
         uses: actions/setup-java@v4
         with:
-          distribution: 'corretto'
+          distribution: corretto
           java-version: ${{ env.JAVA_NUMERIC_VERSION }}
       - name: Check Tag
-        id: java-check-tag
+        id: check-tag
+        env:
+          GIT_REF: ${{ github.event.ref }}
         run: |
-          if [[ ${{ github.event.ref }} =~ ^refs/tags/v[0-9]+(\.[0-9]+)*_java$ ]]; then
-              echo "match=true" >> $GITHUB_OUTPUT
+          if [[ "$GIT_REF" =~ ^refs/tags/v[0-9]+(\.[0-9]+)*_java$ ]]; then
+            echo "match=true" >> $GITHUB_OUTPUT
           fi
       - name: Publish ${{ matrix.java-version }} layer
-        if: steps.java-check-tag.outputs.match == 'true'
+        id: publish
+        if: steps.check-tag.outputs.match == 'true'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -47,18 +50,161 @@ jobs:
         with:
           platforms: arm64, amd64
       - name: Publish ECR image for ${{ matrix.java-version }}
-        if: steps.java-check-tag.outputs.match == 'true'
+        id: ecr
+        if: steps.check-tag.outputs.match == 'true'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           cd java
           ./publish-layers.sh build-publish-${{ matrix.java-version }}-ecr-image
-      - name: Notify Slack
-        if: always() && steps.java-check-tag.outputs.match == 'true'
-        uses: ./.github/actions/slack-notify
+      - name: Validate published layer
+        id: validate
+        if: steps.check-tag.outputs.match == 'true' && steps.publish.outcome == 'success'
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          JAVA_VERSION:          ${{ matrix.java-version }}
+        run: |
+          declare -A layer_names
+          layer_names=(
+            ["java8al2"]="NewRelicJava8"
+            ["java11"]="NewRelicJava11"
+            ["java17"]="NewRelicJava17"
+            ["java21"]="NewRelicJava21"
+          )
+          LAYER_NAME="${layer_names[$JAVA_VERSION]}"
+          LAYER_VERSION=$(aws lambda list-layer-versions \
+            --layer-name "$LAYER_NAME" \
+            --region us-east-1 \
+            --query 'LayerVersions[0].Version' \
+            --output text) || true
+          if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
+            echo "::error::Layer validation failed: $LAYER_NAME not found in us-east-1 after publish"
+            exit 1
+          fi
+          echo "Layer validated: $LAYER_NAME v${LAYER_VERSION}"
+          echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
+      - name: Write job result to artifact
+        if: always() && steps.check-tag.outputs.match == 'true'
+        env:
+          JAVA_VERSION:      ${{ matrix.java-version }}
+          JOB_STATUS:        ${{ job.status }}
+          PUBLISH_OUTCOME:   ${{ steps.publish.outcome }}
+          ECR_OUTCOME:       ${{ steps.ecr.outcome }}
+          VALIDATE_OUTCOME:  ${{ steps.validate.outcome }}
+          PUBLISHED_VERSION: ${{ steps.validate.outputs.published-version }}
+        run: |
+          mkdir -p /tmp/layer-results
+
+          if [[ "$PUBLISH_OUTCOME" == "failure" ]]; then
+            REASON="Layer publish to AWS failed"
+          elif [[ "$ECR_OUTCOME" == "failure" ]]; then
+            REASON="ECR image push failed"
+          elif [[ "$VALIDATE_OUTCOME" == "failure" ]]; then
+            REASON="Post-publish validation failed — layer not accessible in AWS"
+          elif [[ "$JOB_STATUS" != "success" ]]; then
+            REASON="Build or setup step failed"
+          fi
+
+          {
+            echo "label=Java ${JAVA_VERSION}"
+            echo "status=${JOB_STATUS}"
+            echo "version=${PUBLISHED_VERSION}"
+            echo "reason=${REASON:-}"
+          } > "/tmp/layer-results/java-${JAVA_VERSION}.txt"
+      - name: Upload result artifact
+        if: always() && steps.check-tag.outputs.match == 'true'
+        uses: actions/upload-artifact@v4
         with:
-          layer-name: Java
-          layer-version: ${{ matrix.java-version }}
-          job-status: ${{ job.status }}
-          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          name: layer-result-java-${{ matrix.java-version }}
+          path: /tmp/layer-results/java-${{ matrix.java-version }}.txt
+          retention-days: 1
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [publish-java]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all result artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: layer-result-java-*
+          merge-multiple: true
+          path: /tmp/layer-results
+      - name: Build and send aggregated Slack notification
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GH_REF_NAME:   ${{ github.ref_name }}
+          GH_ACTOR:      ${{ github.actor }}
+          RUN_URL:       ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          OVERALL="success"
+          RESULTS_TEXT=""
+          FAILED_COUNT=0
+          TOTAL_COUNT=0
+
+          for f in $(ls /tmp/layer-results/*.txt 2>/dev/null | sort); do
+            [[ -f "$f" ]] || continue
+            TOTAL_COUNT=$((TOTAL_COUNT + 1))
+
+            label=$(grep '^label=' "$f" | cut -d= -f2-)
+            status=$(grep '^status=' "$f" | cut -d= -f2-)
+            version=$(grep '^version=' "$f" | cut -d= -f2-)
+            reason=$(grep '^reason=' "$f" | cut -d= -f2-)
+
+            if [[ "$status" == "success" ]]; then
+              [[ -n "$version" ]] \
+                && RESULTS_TEXT+="✅ ${label} (v${version})\n" \
+                || RESULTS_TEXT+="✅ ${label}\n"
+            else
+              OVERALL="failure"
+              FAILED_COUNT=$((FAILED_COUNT + 1))
+              [[ -n "$reason" ]] \
+                && RESULTS_TEXT+="❌ ${label} — ${reason}\n" \
+                || RESULTS_TEXT+="❌ ${label} — ${status}\n"
+            fi
+          done
+
+          if [[ "$OVERALL" == "success" ]]; then
+            HEADER="✅ Java Layer Release Succeeded"
+          else
+            HEADER="❌ Java Layer Release Failed (${FAILED_COUNT}/${TOTAL_COUNT} versions failed)"
+          fi
+
+          EXTRA_BLOCKS="[]"
+          if [[ "$FAILED_COUNT" -eq "$TOTAL_COUNT" && "$TOTAL_COUNT" -gt 0 ]]; then
+            EXTRA_BLOCKS=$(jq -n --arg url "$RUN_URL" \
+              '[{ type: "section", text: { type: "mrkdwn", text: ("⚠️ All versions failed. <" + $url + "|View full logs here>.") } }]')
+          fi
+
+          PAYLOAD=$(jq -n \
+            --arg header "$HEADER" \
+            --arg ref_name "$GH_REF_NAME" \
+            --arg actor "$GH_ACTOR" \
+            --arg results "$(echo -e "$RESULTS_TEXT")" \
+            --arg run_url "$RUN_URL" \
+            --argjson extra_blocks "$EXTRA_BLOCKS" \
+            '{
+              blocks: [
+                { type: "header", text: { type: "plain_text", text: $header, emoji: true } },
+                {
+                  type: "section",
+                  fields: [
+                    { type: "mrkdwn", text: ("*Tag:*\n`" + $ref_name + "`") },
+                    { type: "mrkdwn", text: ("*Triggered by:*\n" + $actor) }
+                  ]
+                },
+                { type: "section", text: { type: "mrkdwn", text: ("*Layer Results:*\n" + $results) } }
+              ] + $extra_blocks + [
+                {
+                  type: "actions",
+                  elements: [{ type: "button", text: { type: "plain_text", text: "View Workflow Run" }, url: $run_url }]
+                }
+              ]
+            }')
+
+          curl -sf -X POST "$SLACK_WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d "$PAYLOAD"

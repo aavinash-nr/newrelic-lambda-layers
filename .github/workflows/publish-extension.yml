@@ -8,37 +8,79 @@ on:
 jobs:
   publish-extension:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: [ 3.12 ]
+    outputs:
+      failure-reason:    ${{ steps.capture-failure.outputs.reason }}
+      published-version: ${{ steps.validate.outputs.published-version }}
     steps:
       - uses: actions/checkout@v4
       - name: Check Tag
-        id: extension-check-tag
+        id: check-tag
+        env:
+          GIT_REF: ${{ github.event.ref }}
         run: |
-          if [[ ${{ github.event.ref }} =~ ^refs/tags/v[0-9]+(\.[0-9]+)*_extension$ ]]; then
-              echo "match=true" >> $GITHUB_OUTPUT
+          if [[ "$GIT_REF" =~ ^refs/tags/v[0-9]+(\.[0-9]+)*_extension$ ]]; then
+            echo "match=true" >> $GITHUB_OUTPUT
           fi
       - name: Install publish dependencies
-        if: steps.extension-check-tag.outputs.match == 'true'
+        if: steps.check-tag.outputs.match == 'true'
         run: pip install -U awscli
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64, amd64
       - name: Publish extension layer
-        if: steps.extension-check-tag.outputs.match == 'true'
+        id: publish
+        if: steps.check-tag.outputs.match == 'true'
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           cd extension
           ./publish-layer.sh
-      - name: Notify Slack
-        if: always() && steps.extension-check-tag.outputs.match == 'true'
+      - name: Validate published layer
+        id: validate
+        if: steps.check-tag.outputs.match == 'true' && steps.publish.outcome == 'success'
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          LAYER_VERSION=$(aws lambda list-layer-versions \
+            --layer-name NewRelicLambdaExtension \
+            --region us-east-1 \
+            --query 'LayerVersions[0].Version' \
+            --output text) || true
+          if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
+            echo "::error::Layer validation failed: NewRelicLambdaExtension not found in us-east-1 after publish"
+            exit 1
+          fi
+          echo "Layer validated: NewRelicLambdaExtension v${LAYER_VERSION}"
+          echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
+      - name: Capture failure details
+        id: capture-failure
+        if: failure()
+        env:
+          PUBLISH_OUTCOME:  ${{ steps.publish.outcome }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+        run: |
+          if [[ "$PUBLISH_OUTCOME" == "failure" ]]; then
+            echo "reason=Layer publish to AWS failed" >> $GITHUB_OUTPUT
+          elif [[ "$VALIDATE_OUTCOME" == "failure" ]]; then
+            echo "reason=Post-publish validation failed — layer not accessible in AWS" >> $GITHUB_OUTPUT
+          else
+            echo "reason=Build or setup step failed" >> $GITHUB_OUTPUT
+          fi
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [publish-extension]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - name: Send Slack notification
         uses: ./.github/actions/slack-notify
         with:
-          layer-name: Extension
-          layer-version: ''
-          job-status: ${{ job.status }}
+          layer-name:        Extension
+          job-status:        ${{ needs.publish-extension.result }}
+          published-version: ${{ needs.publish-extension.outputs.published-version }}
+          failure-details:   ${{ needs.publish-extension.outputs.failure-reason }}
           slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}

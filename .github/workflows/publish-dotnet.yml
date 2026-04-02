@@ -8,12 +8,17 @@ on:
 jobs:
   publish-dotnet:
     runs-on: ubuntu-latest
+    outputs:
+      failure-reason:    ${{ steps.capture-failure.outputs.reason }}
+      published-version: ${{ steps.validate.outputs.published-version }}
     steps:
       - name: Check Tag
-        id: dotnet-check-tag
+        id: check-tag
+        env:
+          GIT_REF: ${{ github.event.ref }}
         run: |
-          if [[ ${{ github.event.ref }} =~ ^refs/tags/v[0-9]+(\.[0-9]+)*_dotnet ]]; then
-              echo "match=true" >> $GITHUB_OUTPUT
+          if [[ "$GIT_REF" =~ ^refs/tags/v[0-9]+(\.[0-9]+)*_dotnet ]]; then
+            echo "match=true" >> $GITHUB_OUTPUT
           fi
       - uses: actions/checkout@v4
       - name: Set up QEMU
@@ -21,19 +26,58 @@ jobs:
         with:
           platforms: arm64, amd64
       - name: Publish Dotnet Layer
-        if: steps.dotnet-check-tag.outputs.match == 'true'
+        id: publish
+        if: steps.check-tag.outputs.match == 'true'
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AGENT_VERSION: ${{ steps.dotnet-check-tag.outputs.version }}
         run: |
           cd dotnet
           ./publish-layers.sh
-      - name: Notify Slack
-        if: always() && steps.dotnet-check-tag.outputs.match == 'true'
+      - name: Validate published layer
+        id: validate
+        if: steps.check-tag.outputs.match == 'true' && steps.publish.outcome == 'success'
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          LAYER_VERSION=$(aws lambda list-layer-versions \
+            --layer-name NewRelicDotnet \
+            --region us-east-1 \
+            --query 'LayerVersions[0].Version' \
+            --output text) || true
+          if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
+            echo "::error::Layer validation failed: NewRelicDotnet not found in us-east-1 after publish"
+            exit 1
+          fi
+          echo "Layer validated: NewRelicDotnet v${LAYER_VERSION}"
+          echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
+      - name: Capture failure details
+        id: capture-failure
+        if: failure()
+        env:
+          PUBLISH_OUTCOME:  ${{ steps.publish.outcome }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+        run: |
+          if [[ "$PUBLISH_OUTCOME" == "failure" ]]; then
+            echo "reason=Layer publish to AWS failed" >> $GITHUB_OUTPUT
+          elif [[ "$VALIDATE_OUTCOME" == "failure" ]]; then
+            echo "reason=Post-publish validation failed — layer not accessible in AWS" >> $GITHUB_OUTPUT
+          else
+            echo "reason=Build or setup step failed" >> $GITHUB_OUTPUT
+          fi
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [publish-dotnet]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - name: Send Slack notification
         uses: ./.github/actions/slack-notify
         with:
-          layer-name: .NET
-          layer-version: ''
-          job-status: ${{ job.status }}
+          layer-name:        .NET
+          job-status:        ${{ needs.publish-dotnet.result }}
+          published-version: ${{ needs.publish-dotnet.outputs.published-version }}
+          failure-details:   ${{ needs.publish-dotnet.outputs.failure-reason }}
           slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
