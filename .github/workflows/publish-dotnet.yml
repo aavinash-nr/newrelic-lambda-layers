@@ -80,4 +80,4 @@ jobs:
           job-status:        ${{ needs.publish-dotnet.result }}
           published-version: ${{ needs.publish-dotnet.outputs.published-version }}
           failure-details:   ${{ needs.publish-dotnet.outputs.failure-reason }}
-          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack-webhook-url: ${{ secrets.LAYER_RELEASE_SLACK_WEBHOOK }}

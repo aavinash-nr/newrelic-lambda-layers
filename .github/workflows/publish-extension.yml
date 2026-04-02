@@ -83,4 +83,4 @@ jobs:
           job-status:        ${{ needs.publish-extension.result }}
           published-version: ${{ needs.publish-extension.outputs.published-version }}
           failure-details:   ${{ needs.publish-extension.outputs.failure-reason }}
-          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack-webhook-url: ${{ secrets.LAYER_RELEASE_SLACK_WEBHOOK }}
