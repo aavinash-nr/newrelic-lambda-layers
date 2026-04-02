@@ -1,0 +1,124 @@
+name: 'Aggregated Slack Release Notification'
+description: 'Download per-version result artifacts and send an aggregated Slack notification'
+
+inputs:
+  artifact-pattern:
+    description: 'Glob pattern to match result artifacts (e.g. layer-result-node-*)'
+    required: true
+  language-name:
+    description: 'Human-readable language name used in the Slack header (e.g. Node.js, Python)'
+    required: true
+  slack-webhook-url:
+    description: 'Slack Incoming Webhook URL'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Download all result artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: ${{ inputs.artifact-pattern }}
+        merge-multiple: true
+        path: /tmp/layer-results
+
+    - name: Build and send aggregated Slack notification
+      shell: bash
+      env:
+        SLACK_WEBHOOK: ${{ inputs.slack-webhook-url }}
+        LANGUAGE_NAME: ${{ inputs.language-name }}
+        GH_REF_NAME:   ${{ github.ref_name }}
+        GH_ACTOR:      ${{ github.actor }}
+        RUN_URL:       ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        OVERALL="success"
+        RESULTS_TEXT=""
+        FAILED_COUNT=0
+        TOTAL_COUNT=0
+        ALL_SKIPPED_REGIONS=()
+
+        for f in $(ls /tmp/layer-results/*.txt 2>/dev/null | sort); do
+          [[ -f "$f" ]] || continue
+          TOTAL_COUNT=$((TOTAL_COUNT + 1))
+
+          label=$(grep '^label=' "$f" | cut -d= -f2-)
+          status=$(grep '^status=' "$f" | cut -d= -f2-)
+          version=$(grep '^version=' "$f" | cut -d= -f2-)
+          reason=$(grep '^reason=' "$f" | cut -d= -f2-)
+          skipped=$(grep '^skipped-regions=' "$f" | cut -d= -f2-)
+
+          if [[ "$status" == "success" ]]; then
+            [[ -n "$version" ]] \
+              && RESULTS_TEXT+="✅ ${label} (v${version})\n" \
+              || RESULTS_TEXT+="✅ ${label}\n"
+          else
+            OVERALL="failure"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            [[ -n "$reason" ]] \
+              && RESULTS_TEXT+="❌ ${label} — ${reason}\n" \
+              || RESULTS_TEXT+="❌ ${label} — ${status}\n"
+          fi
+
+          if [[ -n "$skipped" ]]; then
+            IFS=',' read -ra regions <<< "$skipped"
+            for r in "${regions[@]}"; do
+              [[ -n "$r" ]] && ALL_SKIPPED_REGIONS+=("$r")
+            done
+          fi
+        done
+
+        UNIQUE_SKIPPED=$(printf '%s\n' "${ALL_SKIPPED_REGIONS[@]}" | sort -u | tr '\n' ',')
+
+        if [[ "$OVERALL" == "success" ]]; then
+          HEADER="✅ ${LANGUAGE_NAME} Layer Release Succeeded"
+        else
+          HEADER="❌ ${LANGUAGE_NAME} Layer Release Failed (${FAILED_COUNT}/${TOTAL_COUNT} versions failed)"
+        fi
+
+        EXTRA_BLOCKS="[]"
+        if [[ -n "$UNIQUE_SKIPPED" ]]; then
+          SKIPPED_LIST=$(echo "$UNIQUE_SKIPPED" | tr ',' '\n' | grep -v '^$' | sed 's/^/• /' | tr '\n' '\n')
+          REGION_BLOCK=$(jq -n --arg text "⚠️ *Regions skipped (AWS infra errors):*\n${SKIPPED_LIST}\nThese may need a manual re-publish." \
+            '[{ type: "section", text: { type: "mrkdwn", text: $text } }]')
+          EXTRA_BLOCKS=$(jq -n --argjson a "$EXTRA_BLOCKS" --argjson b "$REGION_BLOCK" '$a + $b')
+        elif [[ "$OVERALL" == "success" ]]; then
+          EXTRA_BLOCKS=$(jq -n '[{ type: "section", text: { type: "mrkdwn", text: "✅ All regions published successfully" } }]')
+        fi
+
+        if [[ "$FAILED_COUNT" -eq "$TOTAL_COUNT" && "$TOTAL_COUNT" -gt 0 ]]; then
+          ALL_FAILED=$(jq -n --arg url "$RUN_URL" \
+            '[{ type: "section", text: { type: "mrkdwn", text: ("⚠️ All versions failed. <" + $url + "|View full logs here>.") } }]')
+          EXTRA_BLOCKS=$(jq -n --argjson a "$EXTRA_BLOCKS" --argjson b "$ALL_FAILED" '$a + $b')
+        fi
+
+        PAYLOAD=$(jq -n \
+          --arg header "$HEADER" \
+          --arg ref_name "$GH_REF_NAME" \
+          --arg actor "$GH_ACTOR" \
+          --arg results "$(echo -e "$RESULTS_TEXT")" \
+          --arg run_url "$RUN_URL" \
+          --argjson extra_blocks "$EXTRA_BLOCKS" \
+          '{
+            blocks: (
+              [
+                { type: "header", text: { type: "plain_text", text: $header, emoji: true } },
+                {
+                  type: "section",
+                  fields: [
+                    { type: "mrkdwn", text: ("*Tag:*\n`" + $ref_name + "`") },
+                    { type: "mrkdwn", text: ("*Triggered by:*\n" + $actor) }
+                  ]
+                },
+                { type: "section", text: { type: "mrkdwn", text: ("*Layer Results:*\n" + $results) } }
+              ] + $extra_blocks + [
+                {
+                  type: "actions",
+                  elements: [{ type: "button", text: { type: "plain_text", text: "View Workflow Run" }, url: $run_url }]
+                }
+              ]
+            )
+          }')
+
+        curl -sf -X POST "$SLACK_WEBHOOK" \
+          -H 'Content-Type: application/json' \
+          -d "$PAYLOAD"

@@ -253,6 +253,12 @@ function s3_prefix() {
     "java11")
       name="java-11"
       ;;
+    "java17")
+      name="java-17"
+      ;;
+    "java21")
+      name="java-21"
+      ;;
     "python3.9")
       name="nr-python3.9"
       ;;
@@ -285,6 +291,9 @@ function s3_prefix() {
       ;;
     "nodejs")
       name="nr-nodejs"
+      ;;
+    "ruby3.2")
+      name="nr-ruby3.2"
       ;;
     "ruby3.3")
       name="nr-ruby3.3"

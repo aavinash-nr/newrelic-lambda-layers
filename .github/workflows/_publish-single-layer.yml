@@ -1,90 +1,98 @@
-name: Publish Java Layers
+name: _Publish Single Layer (reusable)
 
 on:
-  push:
-    tags:
-      - v**_java
+  workflow_call:
+    inputs:
+      tag-pattern:
+        description: 'Bash regex for the tag check (e.g. ^refs/tags/v[0-9]+(\\.[0-9]+)*_dotnet)'
+        required: true
+        type: string
+      install-awscli:
+        description: 'Whether to pip install awscli before publishing'
+        required: false
+        type: boolean
+        default: false
+      publish-dir:
+        description: 'Directory containing the publish script (e.g. dotnet, extension)'
+        required: true
+        type: string
+      publish-script:
+        description: 'Publish script to run inside publish-dir (e.g. ./publish-layers.sh)'
+        required: true
+        type: string
+      layer-name-aws:
+        description: 'AWS Lambda layer name used for post-publish validation (e.g. NewRelicDotnet)'
+        required: true
+        type: string
+      artifact-key:
+        description: 'Short key used for the result artifact name and file (e.g. dotnet, extension)'
+        required: true
+        type: string
+      artifact-label:
+        description: 'Human-readable label written into the result artifact (e.g. .NET, Extension)'
+        required: true
+        type: string
+      language-name:
+        description: 'Language name shown in the Slack notification header (e.g. .NET, Extension)'
+        required: true
+        type: string
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      LAYER_RELEASE_SLACK_WEBHOOK:
+        required: true
 
 jobs:
-  publish-java:
+  publish:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        java-version: [java8al2, java11, java17, java21]
     steps:
-      - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # pin@v4
-      - name: Set up Java version
-        run: |
-          declare -A map_java_version
-          map_java_version=(
-            ["java8al2"]="8"
-            ["java11"]="11"
-            ["java17"]="17"
-            ["java21"]="21"
-          )
-          java_numeric_version=${map_java_version[${{ matrix.java-version }}]}
-          echo "JAVA_NUMERIC_VERSION=$java_numeric_version" >> $GITHUB_ENV
-      - name: Use Java ${{ env.JAVA_NUMERIC_VERSION }}
-        uses: actions/setup-java@v4
-        with:
-          distribution: corretto
-          java-version: ${{ env.JAVA_NUMERIC_VERSION }}
+      - uses: actions/checkout@v4
       - name: Check Tag
         id: check-tag
         env:
-          GIT_REF: ${{ github.event.ref }}
+          GIT_REF:     ${{ github.event.ref }}
+          TAG_PATTERN: ${{ inputs.tag-pattern }}
         run: |
-          if [[ "$GIT_REF" =~ ^refs/tags/v[0-9]+(\.[0-9]+)*_java$ ]]; then
+          if [[ "$GIT_REF" =~ $TAG_PATTERN ]]; then
             echo "match=true" >> $GITHUB_OUTPUT
           fi
-      - name: Pre-flight check (credentials + S3 buckets)
-        if: steps.check-tag.outputs.match == 'true'
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          BUCKET_NAME_PREFIX: ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
-        run: |
-          source libBuild.sh
-          preflight_check
-      - name: Publish ${{ matrix.java-version }} layer
-        id: publish
-        if: steps.check-tag.outputs.match == 'true'
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          BUCKET_NAME_PREFIX: ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
-        run: make publish-${{ matrix.java-version }}-ci
+      - name: Install publish dependencies
+        if: steps.check-tag.outputs.match == 'true' && inputs.install-awscli
+        run: pip install -U awscli
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64, amd64
-      - name: Publish ECR image for ${{ matrix.java-version }}
-        id: ecr
+      - name: Pre-flight check (credentials + S3 buckets)
         if: steps.check-tag.outputs.match == 'true'
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          ECR_REPO_NAME: ${{ vars.ECR_REPO_NAME || 'x6n7b2o2' }}
+          BUCKET_NAME_PREFIX:    ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
         run: |
-          cd java
-          ./publish-layers.sh build-publish-${{ matrix.java-version }}-ecr-image
+          source libBuild.sh
+          preflight_check
+      - name: Publish layer
+        id: publish
+        if: steps.check-tag.outputs.match == 'true'
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BUCKET_NAME_PREFIX:    ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
+          ECR_REPO_NAME:         ${{ vars.ECR_REPO_NAME || 'x6n7b2o2' }}
+        run: |
+          cd ${{ inputs.publish-dir }}
+          ${{ inputs.publish-script }}
       - name: Validate published layer
         id: validate
         if: steps.check-tag.outputs.match == 'true' && steps.publish.outcome == 'success'
         env:
           AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          JAVA_VERSION:          ${{ matrix.java-version }}
+          LAYER_NAME:            ${{ inputs.layer-name-aws }}
         run: |
-          declare -A layer_names
-          layer_names=(
-            ["java8al2"]="NewRelicJava8"
-            ["java11"]="NewRelicJava11"
-            ["java17"]="NewRelicJava17"
-            ["java21"]="NewRelicJava21"
-          )
-          LAYER_NAME="${layer_names[$JAVA_VERSION]}"
           LAYER_VERSION=$(aws lambda list-layer-versions \
             --layer-name "$LAYER_NAME" \
             --region us-east-1 \
@@ -99,10 +107,10 @@ jobs:
       - name: Write job result to artifact
         if: always() && steps.check-tag.outputs.match == 'true'
         env:
-          JAVA_VERSION:      ${{ matrix.java-version }}
+          ARTIFACT_LABEL:    ${{ inputs.artifact-label }}
+          ARTIFACT_KEY:      ${{ inputs.artifact-key }}
           JOB_STATUS:        ${{ job.status }}
           PUBLISH_OUTCOME:   ${{ steps.publish.outcome }}
-          ECR_OUTCOME:       ${{ steps.ecr.outcome }}
           VALIDATE_OUTCOME:  ${{ steps.validate.outcome }}
           PUBLISHED_VERSION: ${{ steps.validate.outputs.published-version }}
         run: |
@@ -110,8 +118,6 @@ jobs:
 
           if [[ "$PUBLISH_OUTCOME" == "failure" ]]; then
             REASON="Layer publish to AWS failed"
-          elif [[ "$ECR_OUTCOME" == "failure" ]]; then
-            REASON="ECR image push failed"
           elif [[ "$VALIDATE_OUTCOME" == "failure" ]]; then
             REASON="Post-publish validation failed — layer not accessible in AWS"
           elif [[ "$JOB_STATUS" != "success" ]]; then
@@ -122,29 +128,29 @@ jobs:
           [[ -f /tmp/layer-results/skipped-regions.txt ]] && SKIPPED_REGIONS=$(cat /tmp/layer-results/skipped-regions.txt | tr '\n' ',')
 
           {
-            echo "label=Java ${JAVA_VERSION}"
+            echo "label=${ARTIFACT_LABEL}"
             echo "status=${JOB_STATUS}"
             echo "version=${PUBLISHED_VERSION}"
             echo "reason=${REASON:-}"
             echo "skipped-regions=${SKIPPED_REGIONS}"
-          } > "/tmp/layer-results/java-${JAVA_VERSION}.txt"
+          } > "/tmp/layer-results/${ARTIFACT_KEY}.txt"
       - name: Upload result artifact
         if: always() && steps.check-tag.outputs.match == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: layer-result-java-${{ matrix.java-version }}
-          path: /tmp/layer-results/java-${{ matrix.java-version }}.txt
+          name: layer-result-${{ inputs.artifact-key }}
+          path: /tmp/layer-results/${{ inputs.artifact-key }}.txt
           retention-days: 1
 
   notify:
     runs-on: ubuntu-latest
-    needs: [publish-java]
+    needs: [publish]
     if: always()
     steps:
       - uses: actions/checkout@v4
       - name: Send aggregated Slack notification
         uses: ./.github/actions/slack-notify-aggregated
         with:
-          artifact-pattern:  layer-result-java-*
-          language-name:     Java
+          artifact-pattern:  layer-result-${{ inputs.artifact-key }}*
+          language-name:     ${{ inputs.language-name }}
           slack-webhook-url: ${{ secrets.LAYER_RELEASE_SLACK_WEBHOOK }}
