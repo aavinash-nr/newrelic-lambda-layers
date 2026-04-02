@@ -53,10 +53,9 @@ function preflight_check {
   local caller_identity
   caller_identity=$(aws sts get-caller-identity 2>&1) || {
     echo "FATAL: AWS credentials are invalid or missing." >&2
-    echo "$caller_identity" >&2
     exit 1
   }
-  echo "Credentials OK: $(echo "$caller_identity" | jq -r '.Arn' 2>/dev/null || echo "validated")"
+  echo "Credentials OK"
 
   # 2. Per-region S3 bucket check
   local region
