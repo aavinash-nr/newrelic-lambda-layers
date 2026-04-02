@@ -24,6 +24,11 @@ AWS_INFRA_ERRORS=(
   "NoSuchBucket"
   # Bucket exists but our role has no access to it in this region
   "AccessDenied"
+  # Region exists in AWS but is not opted-in / enabled for this account
+  "OptInRequired"
+  # Disabled regions return InvalidAccessKeyId because their STS endpoint is inactive.
+  # Safe to add here ONLY because check_aws_credentials() validates credentials upfront.
+  "InvalidAccessKeyId"
 )
 
 # Checks if an AWS CLI error message contains an infrastructure error code.
@@ -70,6 +75,24 @@ function run_aws_with_infra_check {
   fi
 }
 
+# Checked once on the first call to publish_layer — never called again.
+# This is what makes it safe to treat InvalidAccessKeyId as a skippable
+# infra error: disabled regions return that code, but only after we've
+# already confirmed credentials are valid globally via STS.
+_CREDENTIALS_CHECKED=false
+
+function check_aws_credentials {
+  [[ "$_CREDENTIALS_CHECKED" == "true" ]] && return 0
+  local output
+  output=$(aws sts get-caller-identity 2>&1) || {
+    echo "FATAL: AWS credentials are invalid or missing." >&2
+    echo "$output" >&2
+    exit 1
+  }
+  echo "AWS credentials validated: $(echo "$output" | jq -r '.Arn' 2>/dev/null || echo "OK")"
+  _CREDENTIALS_CHECKED=true
+}
+
 # Report any regions that were skipped due to AWS infrastructure errors.
 # Writes to /tmp/skipped-regions.txt so CI workflows can surface them in Slack.
 # Automatically runs on script exit via trap — no need to call manually.
@@ -99,7 +122,7 @@ trap report_skipped_regions EXIT
 
 REGIONS=(
   # sa-east-1
-  me-central-1
+  # me-central-1
   me-south-1
   # eu-central-2
   # eu-north-1
@@ -387,6 +410,7 @@ function publish_public_layer {
 
 
 function publish_layer {
+    check_aws_credentials
     layer_archive=$1
     region=$2
     runtime_name=$3
