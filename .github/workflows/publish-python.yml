@@ -6,8 +6,37 @@ on:
       - v**_python
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      tag-match:       ${{ steps.check-tag.outputs.match }}
+      skipped-regions: ${{ steps.run.outputs.skipped-regions }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Tag
+        id: check-tag
+        env:
+          GIT_REF: ${{ github.event.ref }}
+        run: |
+          if [[ "$GIT_REF" =~ ^refs/tags/v[0-9]+(\.[0-9]+)*_python$ ]]; then
+            echo "match=true" >> $GITHUB_OUTPUT
+          fi
+      - name: Pre-flight check (credentials + S3 buckets)
+        id: run
+        if: steps.check-tag.outputs.match == 'true'
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BUCKET_NAME_PREFIX:    ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
+        run: |
+          source libBuild.sh
+          preflight_check
+          echo "skipped-regions=$(IFS=,; echo "${PREFLIGHT_SKIP[*]}")" >> $GITHUB_OUTPUT
+
   publish-python:
     runs-on: ubuntu-latest
+    needs: [preflight]
+    if: needs.preflight.outputs.tag-match == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -17,33 +46,24 @@ jobs:
       - name: Setup
         id: setup
         uses: ./.github/actions/python-layer-setup
-      - name: Pre-flight check (credentials + S3 buckets)
-        if: steps.setup.outputs.tag-match == 'true'
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          BUCKET_NAME_PREFIX: ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
-        run: |
-          source libBuild.sh
-          preflight_check
       - name: Publish Python ${{ matrix.python-version }} layer
         id: publish
-        if: steps.setup.outputs.tag-match == 'true'
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_ACCESS_KEY_ID:      ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY:  ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BUCKET_NAME_PREFIX:     ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
+          PREFLIGHT_SKIP_REGIONS: ${{ needs.preflight.outputs.skipped-regions }}
         run: |
           cd python
           ./publish-layers.sh python${{ matrix.python-version }}
       - name: Validate published layer
         id: validate
-        if: steps.setup.outputs.tag-match == 'true' && steps.publish.outcome == 'success'
+        if: steps.publish.outcome == 'success'
         env:
           AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           PYTHON_VERSION:        ${{ matrix.python-version }}
         run: |
-          # Map 3.9 → Python39, 3.10 → Python310 etc.
           LAYER_SUFFIX=$(echo "$PYTHON_VERSION" | tr -d '.')
           LAYER_NAME="NewRelicPython${LAYER_SUFFIX}"
           LAYER_VERSION=$(aws lambda list-layer-versions \
@@ -58,7 +78,7 @@ jobs:
           echo "Layer validated: $LAYER_NAME v${LAYER_VERSION}"
           echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
       - name: Write job result to artifact
-        if: always() && steps.setup.outputs.tag-match == 'true'
+        if: always()
         env:
           PYTHON_VERSION:    ${{ matrix.python-version }}
           JOB_STATUS:        ${{ job.status }}
@@ -87,7 +107,7 @@ jobs:
             echo "skipped-regions=${SKIPPED_REGIONS}"
           } > "/tmp/layer-results/python-${PYTHON_VERSION}.txt"
       - name: Upload result artifact
-        if: always() && steps.setup.outputs.tag-match == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: layer-result-python-${{ matrix.python-version }}
@@ -96,32 +116,26 @@ jobs:
 
   publish-python-universal:
     runs-on: ubuntu-latest
+    needs: [preflight]
+    if: needs.preflight.outputs.tag-match == 'true'
     steps:
       - uses: actions/checkout@v4
       - name: Setup
         id: setup
         uses: ./.github/actions/python-layer-setup
-      - name: Pre-flight check (credentials + S3 buckets)
-        if: steps.setup.outputs.tag-match == 'true'
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          BUCKET_NAME_PREFIX: ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
-        run: |
-          source libBuild.sh
-          preflight_check
       - name: Publish universal Python layer
         id: publish
-        if: steps.setup.outputs.tag-match == 'true'
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_ACCESS_KEY_ID:      ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY:  ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BUCKET_NAME_PREFIX:     ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
+          PREFLIGHT_SKIP_REGIONS: ${{ needs.preflight.outputs.skipped-regions }}
         run: |
           cd python
           ./publish-layers.sh python
       - name: Validate published layer
         id: validate
-        if: steps.setup.outputs.tag-match == 'true' && steps.publish.outcome == 'success'
+        if: steps.publish.outcome == 'success'
         env:
           AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -138,7 +152,7 @@ jobs:
           echo "Layer validated: NewRelicPython v${LAYER_VERSION}"
           echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
       - name: Write job result to artifact
-        if: always() && steps.setup.outputs.tag-match == 'true'
+        if: always()
         env:
           JOB_STATUS:        ${{ job.status }}
           PUBLISH_OUTCOME:   ${{ steps.publish.outcome }}
@@ -166,7 +180,7 @@ jobs:
             echo "skipped-regions=${SKIPPED_REGIONS}"
           } > /tmp/layer-results/python-universal.txt
       - name: Upload result artifact
-        if: always() && steps.setup.outputs.tag-match == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: layer-result-python-universal

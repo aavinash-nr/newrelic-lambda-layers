@@ -6,8 +6,37 @@ on:
       - v**_nodejs
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      tag-match:       ${{ steps.check-tag.outputs.match }}
+      skipped-regions: ${{ steps.run.outputs.skipped-regions }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Tag
+        id: check-tag
+        env:
+          GIT_REF: ${{ github.event.ref }}
+        run: |
+          if [[ "$GIT_REF" =~ ^refs/tags/v[0-9]+(\.[0-9]+)*_nodejs$ ]]; then
+            echo "match=true" >> $GITHUB_OUTPUT
+          fi
+      - name: Pre-flight check (credentials + S3 buckets)
+        id: run
+        if: steps.check-tag.outputs.match == 'true'
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BUCKET_NAME_PREFIX:    ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
+        run: |
+          source libBuild.sh
+          preflight_check
+          echo "skipped-regions=$(IFS=,; echo "${PREFLIGHT_SKIP[*]}")" >> $GITHUB_OUTPUT
+
   publish-node:
     runs-on: ubuntu-latest
+    needs: [preflight]
+    if: needs.preflight.outputs.tag-match == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -20,40 +49,30 @@ jobs:
         uses: ./.github/actions/node-layer-setup
         with:
           node-version: ${{ matrix.node-version }}
-      - name: Pre-flight check (credentials + S3 buckets)
-        if: steps.setup.outputs.tag-match == 'true'
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          BUCKET_NAME_PREFIX: ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
-        run: |
-          source libBuild.sh
-          preflight_check
       - name: Publish layer
         id: publish
-        if: steps.setup.outputs.tag-match == 'true'
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          BUCKET_NAME_PREFIX: ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
+          AWS_ACCESS_KEY_ID:        ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY:    ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BUCKET_NAME_PREFIX:       ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
+          PREFLIGHT_SKIP_REGIONS:   ${{ needs.preflight.outputs.skipped-regions }}
         run: make publish-nodejs${{ matrix.node-version }}-ci
       - name: Publish ECR image
         id: ecr
-        if: steps.setup.outputs.tag-match == 'true'
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          ECR_REPO_NAME: ${{ vars.ECR_REPO_NAME || 'x6n7b2o2' }}
+          ECR_REPO_NAME:         ${{ vars.ECR_REPO_NAME || 'x6n7b2o2' }}
         run: |
           cd nodejs
           ./publish-layers.sh build-publish-${{ matrix.node-version }}-ecr-image
       - name: Validate published layer
         id: validate
-        if: steps.setup.outputs.tag-match == 'true' && steps.publish.outcome == 'success'
+        if: steps.publish.outcome == 'success'
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          NODE_VERSION: ${{ matrix.node-version }}
+          NODE_VERSION:          ${{ matrix.node-version }}
         run: |
           LAYER_NAME="NewRelicNodeJS${NODE_VERSION}X"
           LAYER_VERSION=$(aws lambda list-layer-versions \
@@ -68,7 +87,6 @@ jobs:
           echo "Layer validated: $LAYER_NAME v${LAYER_VERSION}"
           echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
       - name: Upload Unit Test Coverage
-        if: steps.setup.outputs.tag-match == 'true'
         uses: codecov/codecov-action@v5.3.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -77,13 +95,13 @@ jobs:
           flags: unit-tests
       - name: Write job result to artifact
         id: write-result
-        if: always() && steps.setup.outputs.tag-match == 'true'
+        if: always()
         env:
-          NODE_VERSION: ${{ matrix.node-version }}
-          JOB_STATUS:   ${{ job.status }}
-          PUBLISH_OUTCOME:  ${{ steps.publish.outcome }}
-          ECR_OUTCOME:      ${{ steps.ecr.outcome }}
-          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+          NODE_VERSION:      ${{ matrix.node-version }}
+          JOB_STATUS:        ${{ job.status }}
+          PUBLISH_OUTCOME:   ${{ steps.publish.outcome }}
+          ECR_OUTCOME:       ${{ steps.ecr.outcome }}
+          VALIDATE_OUTCOME:  ${{ steps.validate.outcome }}
           PUBLISHED_VERSION: ${{ steps.validate.outputs.published-version }}
         run: |
           mkdir -p /tmp/layer-results
@@ -109,7 +127,7 @@ jobs:
             echo "skipped-regions=${SKIPPED_REGIONS}"
           } > "/tmp/layer-results/node-${NODE_VERSION}.txt"
       - name: Upload result artifact
-        if: always() && steps.setup.outputs.tag-match == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: layer-result-node-${{ matrix.node-version }}
@@ -118,6 +136,8 @@ jobs:
 
   publish-node-universal:
     runs-on: ubuntu-latest
+    needs: [preflight]
+    if: needs.preflight.outputs.tag-match == 'true'
     steps:
       - uses: actions/checkout@v4
       - name: Setup
@@ -125,38 +145,28 @@ jobs:
         uses: ./.github/actions/node-layer-setup
         with:
           node-version: 22
-      - name: Pre-flight check (credentials + S3 buckets)
-        if: steps.setup.outputs.tag-match == 'true'
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          BUCKET_NAME_PREFIX: ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
-        run: |
-          source libBuild.sh
-          preflight_check
       - name: Publish universal layer
         id: publish
-        if: steps.setup.outputs.tag-match == 'true'
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          BUCKET_NAME_PREFIX: ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
+          AWS_ACCESS_KEY_ID:      ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY:  ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BUCKET_NAME_PREFIX:     ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
+          PREFLIGHT_SKIP_REGIONS: ${{ needs.preflight.outputs.skipped-regions }}
         run: make publish-nodejs-universal-ci
       - name: Publish universal ECR image
         id: ecr
-        if: steps.setup.outputs.tag-match == 'true'
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          ECR_REPO_NAME: ${{ vars.ECR_REPO_NAME || 'x6n7b2o2' }}
+          ECR_REPO_NAME:         ${{ vars.ECR_REPO_NAME || 'x6n7b2o2' }}
         run: |
           cd nodejs
           ./publish-layers.sh build-publish-universal-ecr-image
       - name: Validate published layer
         id: validate
-        if: steps.setup.outputs.tag-match == 'true' && steps.publish.outcome == 'success'
+        if: steps.publish.outcome == 'success'
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           LAYER_VERSION=$(aws lambda list-layer-versions \
@@ -171,7 +181,6 @@ jobs:
           echo "Layer validated: NewRelicNodeJS v${LAYER_VERSION}"
           echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
       - name: Upload Unit Test Coverage
-        if: steps.setup.outputs.tag-match == 'true'
         uses: codecov/codecov-action@v5.3.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -179,7 +188,7 @@ jobs:
           fail_ci_if_error: true
           flags: unit-tests
       - name: Write job result to artifact
-        if: always() && steps.setup.outputs.tag-match == 'true'
+        if: always()
         env:
           JOB_STATUS:        ${{ job.status }}
           PUBLISH_OUTCOME:   ${{ steps.publish.outcome }}
@@ -210,7 +219,7 @@ jobs:
             echo "skipped-regions=${SKIPPED_REGIONS}"
           } > /tmp/layer-results/node-universal.txt
       - name: Upload result artifact
-        if: always() && steps.setup.outputs.tag-match == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: layer-result-node-universal

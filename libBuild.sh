@@ -11,6 +11,13 @@ SKIPPED_REGIONS=()
 # Regions that failed pre-flight — never attempted during publish
 PREFLIGHT_SKIP=()
 
+# If the workflow ran preflight once in a dedicated job and passed the result
+# via PREFLIGHT_SKIP_REGIONS (comma-separated), load it now so publish_layer
+# never runs preflight again inside Docker or per-matrix runners.
+if [[ -n "${PREFLIGHT_SKIP_REGIONS:-}" ]]; then
+  IFS=',' read -ra PREFLIGHT_SKIP <<< "$PREFLIGHT_SKIP_REGIONS"
+fi
+
 # Runs an AWS CLI command for a specific region.
 # Any failure is treated as a regional issue — exit code 2 (skip this region).
 # On success, returns 0.
@@ -400,7 +407,9 @@ function publish_public_layer {
 }
 
 
-_PREFLIGHT_DONE=false
+# Mark preflight done if skip list was pre-loaded from env
+_PREFLIGHT_DONE="${PREFLIGHT_SKIP_REGIONS:+true}"
+_PREFLIGHT_DONE="${_PREFLIGHT_DONE:-false}"
 
 function publish_layer {
     # Run pre-flight once before the first publish attempt

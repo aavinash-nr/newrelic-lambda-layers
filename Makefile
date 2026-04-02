@@ -11,6 +11,7 @@ publish-java8al2-ci: build-java8al2
 		-e AWS_SECRET_ACCESS_KEY \
 		-e BUCKET_NAME_PREFIX \
 		-e ECR_REPO_NAME \
+		-e PREFLIGHT_SKIP_REGIONS \
 		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-java8al2
 
@@ -33,6 +34,7 @@ publish-java11-ci: build-java11
 		-e AWS_SECRET_ACCESS_KEY \
 		-e BUCKET_NAME_PREFIX \
 		-e ECR_REPO_NAME \
+		-e PREFLIGHT_SKIP_REGIONS \
 		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-java11
 
@@ -55,6 +57,7 @@ publish-java17-ci: build-java17
 		-e AWS_SECRET_ACCESS_KEY \
 		-e BUCKET_NAME_PREFIX \
 		-e ECR_REPO_NAME \
+		-e PREFLIGHT_SKIP_REGIONS \
 		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-java17
 
@@ -77,6 +80,7 @@ publish-java21-ci: build-java21
 		-e AWS_SECRET_ACCESS_KEY \
 		-e BUCKET_NAME_PREFIX \
 		-e ECR_REPO_NAME \
+		-e PREFLIGHT_SKIP_REGIONS \
 		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-java21
 
@@ -99,6 +103,7 @@ publish-nodejs20-ci: build-nodejs20
 		-e AWS_SECRET_ACCESS_KEY \
 		-e BUCKET_NAME_PREFIX \
 		-e ECR_REPO_NAME \
+		-e PREFLIGHT_SKIP_REGIONS \
 		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-nodejs20
 
@@ -121,6 +126,7 @@ publish-nodejs22-ci: build-nodejs22
 		-e AWS_SECRET_ACCESS_KEY \
 		-e BUCKET_NAME_PREFIX \
 		-e ECR_REPO_NAME \
+		-e PREFLIGHT_SKIP_REGIONS \
 		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-nodejs22
 
@@ -143,6 +149,7 @@ publish-nodejs24-ci: build-nodejs24
 		-e AWS_SECRET_ACCESS_KEY \
 		-e BUCKET_NAME_PREFIX \
 		-e ECR_REPO_NAME \
+		-e PREFLIGHT_SKIP_REGIONS \
 		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-nodejs24
 
@@ -165,6 +172,7 @@ publish-python-universal-ci: build-python-universal
 		-e AWS_SECRET_ACCESS_KEY \
 		-e BUCKET_NAME_PREFIX \
 		-e ECR_REPO_NAME \
+		-e PREFLIGHT_SKIP_REGIONS \
 		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-python
 
@@ -187,6 +195,7 @@ publish-nodejs-universal-ci: build-nodejs-universal
 		-e AWS_SECRET_ACCESS_KEY \
 		-e BUCKET_NAME_PREFIX \
 		-e ECR_REPO_NAME \
+		-e PREFLIGHT_SKIP_REGIONS \
 		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-nodejs
 
@@ -209,6 +218,7 @@ publish-ruby32-ci: build-ruby32
 		-e AWS_SECRET_ACCESS_KEY \
 		-e BUCKET_NAME_PREFIX \
 		-e ECR_REPO_NAME \
+		-e PREFLIGHT_SKIP_REGIONS \
 		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-ruby32
 
@@ -231,6 +241,7 @@ publish-ruby33-ci: build-ruby33
 		-e AWS_SECRET_ACCESS_KEY \
 		-e BUCKET_NAME_PREFIX \
 		-e ECR_REPO_NAME \
+		-e PREFLIGHT_SKIP_REGIONS \
 		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-ruby33
 
@@ -253,6 +264,7 @@ publish-ruby34-ci: build-ruby34
 		-e AWS_SECRET_ACCESS_KEY \
 		-e BUCKET_NAME_PREFIX \
 		-e ECR_REPO_NAME \
+		-e PREFLIGHT_SKIP_REGIONS \
 		-v /tmp/layer-results:/tmp/layer-results \
 		newrelic-lambda-layers-ruby34
 

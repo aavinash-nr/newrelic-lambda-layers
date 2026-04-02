@@ -45,8 +45,11 @@ on:
         required: true
 
 jobs:
-  publish:
+  preflight:
     runs-on: ubuntu-latest
+    outputs:
+      tag-match:       ${{ steps.check-tag.outputs.match }}
+      skipped-regions: ${{ steps.run.outputs.skipped-regions }}
     steps:
       - uses: actions/checkout@v4
       - name: Check Tag
@@ -58,14 +61,8 @@ jobs:
           if [[ "$GIT_REF" =~ $TAG_PATTERN ]]; then
             echo "match=true" >> $GITHUB_OUTPUT
           fi
-      - name: Install publish dependencies
-        if: steps.check-tag.outputs.match == 'true' && inputs.install-awscli
-        run: pip install -U awscli
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64, amd64
       - name: Pre-flight check (credentials + S3 buckets)
+        id: run
         if: steps.check-tag.outputs.match == 'true'
         env:
           AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -74,20 +71,35 @@ jobs:
         run: |
           source libBuild.sh
           preflight_check
+          echo "skipped-regions=$(IFS=,; echo "${PREFLIGHT_SKIP[*]}")" >> $GITHUB_OUTPUT
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [preflight]
+    if: needs.preflight.outputs.tag-match == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install publish dependencies
+        if: inputs.install-awscli
+        run: pip install -U awscli
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64, amd64
       - name: Publish layer
         id: publish
-        if: steps.check-tag.outputs.match == 'true'
         env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          BUCKET_NAME_PREFIX:    ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
-          ECR_REPO_NAME:         ${{ vars.ECR_REPO_NAME || 'x6n7b2o2' }}
+          AWS_ACCESS_KEY_ID:      ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY:  ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BUCKET_NAME_PREFIX:     ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
+          ECR_REPO_NAME:          ${{ vars.ECR_REPO_NAME || 'x6n7b2o2' }}
+          PREFLIGHT_SKIP_REGIONS: ${{ needs.preflight.outputs.skipped-regions }}
         run: |
           cd ${{ inputs.publish-dir }}
           ${{ inputs.publish-script }}
       - name: Validate published layer
         id: validate
-        if: steps.check-tag.outputs.match == 'true' && steps.publish.outcome == 'success'
+        if: steps.publish.outcome == 'success'
         env:
           AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -105,7 +117,7 @@ jobs:
           echo "Layer validated: $LAYER_NAME v${LAYER_VERSION}"
           echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
       - name: Write job result to artifact
-        if: always() && steps.check-tag.outputs.match == 'true'
+        if: always()
         env:
           ARTIFACT_LABEL:    ${{ inputs.artifact-label }}
           ARTIFACT_KEY:      ${{ inputs.artifact-key }}
@@ -135,7 +147,7 @@ jobs:
             echo "skipped-regions=${SKIPPED_REGIONS}"
           } > "/tmp/layer-results/${ARTIFACT_KEY}.txt"
       - name: Upload result artifact
-        if: always() && steps.check-tag.outputs.match == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: layer-result-${{ inputs.artifact-key }}
