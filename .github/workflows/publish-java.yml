@@ -212,22 +212,24 @@ jobs:
             --arg run_url "$RUN_URL" \
             --argjson extra_blocks "$EXTRA_BLOCKS" \
             '{
-              blocks: [
-                { type: "header", text: { type: "plain_text", text: $header, emoji: true } },
-                {
-                  type: "section",
-                  fields: [
-                    { type: "mrkdwn", text: ("*Tag:*\n`" + $ref_name + "`") },
-                    { type: "mrkdwn", text: ("*Triggered by:*\n" + $actor) }
-                  ]
-                },
-                { type: "section", text: { type: "mrkdwn", text: ("*Layer Results:*\n" + $results) } }
-              ] + $extra_blocks + [
-                {
-                  type: "actions",
-                  elements: [{ type: "button", text: { type: "plain_text", text: "View Workflow Run" }, url: $run_url }]
-                }
-              ]
+              blocks: (
+                [
+                  { type: "header", text: { type: "plain_text", text: $header, emoji: true } },
+                  {
+                    type: "section",
+                    fields: [
+                      { type: "mrkdwn", text: ("*Tag:*\n`" + $ref_name + "`") },
+                      { type: "mrkdwn", text: ("*Triggered by:*\n" + $actor) }
+                    ]
+                  },
+                  { type: "section", text: { type: "mrkdwn", text: ("*Layer Results:*\n" + $results) } }
+                ] + $extra_blocks + [
+                  {
+                    type: "actions",
+                    elements: [{ type: "button", text: { type: "plain_text", text: "View Workflow Run" }, url: $run_url }]
+                  }
+                ]
+              )
             }')
 
           curl -sf -X POST "$SLACK_WEBHOOK" \
