@@ -98,32 +98,32 @@ function report_skipped_regions {
 trap report_skipped_regions EXIT
 
 REGIONS=(
-  sa-east-1
-  # me-central-1
-  # me-south-1
-  eu-central-2
-  eu-north-1
-  eu-south-2
-  eu-west-3
-  eu-south-1
-  eu-west-2
-  eu-west-1
-  eu-central-1
-  ca-central-1
-  ap-northeast-1
-  ap-southeast-2
-  ap-southeast-1
-  ap-northeast-2
-  ap-northeast-3
-  ap-south-1
-  ap-south-2
-  ap-southeast-4
-  ap-southeast-3
-  af-south-1
-  us-east-1
-  us-east-2
+  # sa-east-1
+  me-central-1
+  me-south-1
+  # eu-central-2
+  # eu-north-1
+  # eu-south-2
+  # eu-west-3
+  # eu-south-1
+  # eu-west-2
+  # eu-west-1
+  # eu-central-1
+  # ca-central-1
+  # ap-northeast-1
+  # ap-southeast-2
+  # ap-southeast-1
+  # ap-northeast-2
+  # ap-northeast-3
+  # ap-south-1
+  # ap-south-2
+  # ap-southeast-4
+  # ap-southeast-3
+  # af-south-1
+  # us-east-1
+  # us-east-2
   us-west-1
-  us-west-2
+  # us-west-2
 )
 
 EXTENSION_DIST_DIR=extensions
@@ -398,7 +398,7 @@ function publish_layer {
 
     hash=$( hash_file $layer_archive | awk '{ print $1 }' )
 
-    bucket_name="nr-layers-${region}"
+    bucket_name="nr-test-saket-layers-${region}"
     s3_key="$( s3_prefix $runtime_name )/${hash}.${arch}.zip"
 
     compat_list=( $runtime_name )
@@ -522,9 +522,9 @@ function publish_docker_ecr {
       echo "File does not start with 'dist/': $file_without_dist"
     fi
 
-    # public ecr repository name
+    # public ecr repository name #x6n7b2o2
     # maintainer can use this("q6k3q1g1") repo name for testing
-    repository="x6n7b2o2"
+    repository="q6k3q1g1"
 
     # copy dockerfile
     cp ../Dockerfile.ecrImage .
