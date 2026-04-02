@@ -87,11 +87,15 @@ jobs:
             REASON="Setup or unit tests failed"
           fi
 
+          SKIPPED_REGIONS=""
+          [[ -f /tmp/skipped-regions.txt ]] && SKIPPED_REGIONS=$(cat /tmp/skipped-regions.txt | tr '\n' ',')
+
           {
             echo "label=Node.js ${NODE_VERSION}"
             echo "status=${JOB_STATUS}"
             echo "version=${PUBLISHED_VERSION}"
             echo "reason=${REASON:-}"
+            echo "skipped-regions=${SKIPPED_REGIONS}"
           } > "/tmp/layer-results/node-${NODE_VERSION}.txt"
       - name: Upload result artifact
         if: always() && steps.setup.outputs.tag-match == 'true'
@@ -173,11 +177,15 @@ jobs:
             REASON="Setup or tests failed"
           fi
 
+          SKIPPED_REGIONS=""
+          [[ -f /tmp/skipped-regions.txt ]] && SKIPPED_REGIONS=$(cat /tmp/skipped-regions.txt | tr '\n' ',')
+
           {
             echo "label=Node.js Universal"
             echo "status=${JOB_STATUS}"
             echo "version=${PUBLISHED_VERSION}"
             echo "reason=${REASON:-}"
+            echo "skipped-regions=${SKIPPED_REGIONS}"
           } > /tmp/layer-results/node-universal.txt
       - name: Upload result artifact
         if: always() && steps.setup.outputs.tag-match == 'true'
@@ -208,27 +216,70 @@ jobs:
         run: |
           OVERALL="success"
           RESULTS_TEXT=""
+          FAILED_COUNT=0
+          TOTAL_COUNT=0
+          ALL_SKIPPED_REGIONS=()
 
-          for f in /tmp/layer-results/*.txt; do
+          for f in $(ls /tmp/layer-results/*.txt 2>/dev/null | sort); do
             [[ -f "$f" ]] || continue
+            TOTAL_COUNT=$((TOTAL_COUNT + 1))
 
             label=$(grep '^label=' "$f" | cut -d= -f2-)
             status=$(grep '^status=' "$f" | cut -d= -f2-)
             version=$(grep '^version=' "$f" | cut -d= -f2-)
             reason=$(grep '^reason=' "$f" | cut -d= -f2-)
+            skipped=$(grep '^skipped-regions=' "$f" | cut -d= -f2-)
 
             if [[ "$status" == "success" ]]; then
-              [[ -n "$version" ]] && RESULTS_TEXT+="✅ ${label} (v${version})\n" || RESULTS_TEXT+="✅ ${label}\n"
+              [[ -n "$version" ]] \
+                && RESULTS_TEXT+="✅ ${label} (v${version})\n" \
+                || RESULTS_TEXT+="✅ ${label}\n"
             else
               OVERALL="failure"
-              [[ -n "$reason" ]] && RESULTS_TEXT+="❌ ${label} — ${reason}\n" || RESULTS_TEXT+="❌ ${label} — ${status}\n"
+              FAILED_COUNT=$((FAILED_COUNT + 1))
+              [[ -n "$reason" ]] \
+                && RESULTS_TEXT+="❌ ${label} — ${reason}\n" \
+                || RESULTS_TEXT+="❌ ${label} — ${status}\n"
+            fi
+
+            # Collect skipped regions across all versions (deduplicate)
+            if [[ -n "$skipped" ]]; then
+              IFS=',' read -ra regions <<< "$skipped"
+              for r in "${regions[@]}"; do
+                [[ -n "$r" ]] && ALL_SKIPPED_REGIONS+=("$r")
+              done
             fi
           done
+
+          # Deduplicate skipped regions
+          UNIQUE_SKIPPED=$(printf '%s\n' "${ALL_SKIPPED_REGIONS[@]}" | sort -u | tr '\n' ',')
 
           if [[ "$OVERALL" == "success" ]]; then
             HEADER="✅ Node.js Layer Release Succeeded"
           else
-            HEADER="❌ Node.js Layer Release Failed"
+            HEADER="❌ Node.js Layer Release Failed (${FAILED_COUNT}/${TOTAL_COUNT} versions failed)"
+          fi
+
+          # Region summary block
+          if [[ -n "$UNIQUE_SKIPPED" ]]; then
+            SKIPPED_DISPLAY=$(echo "$UNIQUE_SKIPPED" | tr ',' '\n' | sed 's/^/  • /' | tr '\n' '\n')
+            REGION_TEXT="⚠️ *Regions skipped (AWS infra errors):*\n${SKIPPED_DISPLAY}\nThese may need a manual re-publish."
+          elif [[ "$OVERALL" == "success" ]]; then
+            REGION_TEXT="✅ All regions published successfully"
+          else
+            REGION_TEXT=""
+          fi
+
+          EXTRA_BLOCKS="[]"
+          if [[ -n "$REGION_TEXT" ]]; then
+            EXTRA_BLOCKS=$(jq -n --arg text "$REGION_TEXT" \
+              '[{ type: "section", text: { type: "mrkdwn", text: $text } }]')
+          fi
+
+          if [[ "$FAILED_COUNT" -eq "$TOTAL_COUNT" && "$TOTAL_COUNT" -gt 0 ]]; then
+            ALL_FAILED_BLOCK=$(jq -n --arg url "$RUN_URL" \
+              '[{ type: "section", text: { type: "mrkdwn", text: ("⚠️ All versions failed. <" + $url + "|View full logs here>.") } }]')
+            EXTRA_BLOCKS=$(jq -n --argjson a "$EXTRA_BLOCKS" --argjson b "$ALL_FAILED_BLOCK" '$a + $b')
           fi
 
           PAYLOAD=$(jq -n \
@@ -237,6 +288,7 @@ jobs:
             --arg actor "$GH_ACTOR" \
             --arg results "$(echo -e "$RESULTS_TEXT")" \
             --arg run_url "$RUN_URL" \
+            --argjson extra_blocks "$EXTRA_BLOCKS" \
             '{
               blocks: [
                 { type: "header", text: { type: "plain_text", text: $header, emoji: true } },
@@ -247,7 +299,8 @@ jobs:
                     { type: "mrkdwn", text: ("*Triggered by:*\n" + $actor) }
                   ]
                 },
-                { type: "section", text: { type: "mrkdwn", text: ("*Layer Results:*\n" + $results) } },
+                { type: "section", text: { type: "mrkdwn", text: ("*Layer Results:*\n" + $results) } }
+              ] + $extra_blocks + [
                 {
                   type: "actions",
                   elements: [{ type: "button", text: { type: "plain_text", text: "View Workflow Run" }, url: $run_url }]

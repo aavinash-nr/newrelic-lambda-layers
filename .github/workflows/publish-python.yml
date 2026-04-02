@@ -67,11 +67,15 @@ jobs:
             REASON="Setup step failed"
           fi
 
+          SKIPPED_REGIONS=""
+          [[ -f /tmp/skipped-regions.txt ]] && SKIPPED_REGIONS=$(cat /tmp/skipped-regions.txt | tr '\n' ',')
+
           {
             echo "label=Python ${PYTHON_VERSION}"
             echo "status=${JOB_STATUS}"
             echo "version=${PUBLISHED_VERSION}"
             echo "reason=${REASON:-}"
+            echo "skipped-regions=${SKIPPED_REGIONS}"
           } > "/tmp/layer-results/python-${PYTHON_VERSION}.txt"
       - name: Upload result artifact
         if: always() && steps.setup.outputs.tag-match == 'true'
@@ -133,11 +137,15 @@ jobs:
             REASON="Setup step failed"
           fi
 
+          SKIPPED_REGIONS=""
+          [[ -f /tmp/skipped-regions.txt ]] && SKIPPED_REGIONS=$(cat /tmp/skipped-regions.txt | tr '\n' ',')
+
           {
             echo "label=Python Universal"
             echo "status=${JOB_STATUS}"
             echo "version=${PUBLISHED_VERSION}"
             echo "reason=${REASON:-}"
+            echo "skipped-regions=${SKIPPED_REGIONS}"
           } > /tmp/layer-results/python-universal.txt
       - name: Upload result artifact
         if: always() && steps.setup.outputs.tag-match == 'true'
@@ -170,6 +178,7 @@ jobs:
           RESULTS_TEXT=""
           FAILED_COUNT=0
           TOTAL_COUNT=0
+          ALL_SKIPPED_REGIONS=()
 
           for f in $(ls /tmp/layer-results/*.txt 2>/dev/null | sort); do
             [[ -f "$f" ]] || continue
@@ -179,6 +188,7 @@ jobs:
             status=$(grep '^status=' "$f" | cut -d= -f2-)
             version=$(grep '^version=' "$f" | cut -d= -f2-)
             reason=$(grep '^reason=' "$f" | cut -d= -f2-)
+            skipped=$(grep '^skipped-regions=' "$f" | cut -d= -f2-)
 
             if [[ "$status" == "success" ]]; then
               [[ -n "$version" ]] \
@@ -191,7 +201,16 @@ jobs:
                 && RESULTS_TEXT+="❌ ${label} — ${reason}\n" \
                 || RESULTS_TEXT+="❌ ${label} — ${status}\n"
             fi
+
+            if [[ -n "$skipped" ]]; then
+              IFS=',' read -ra regions <<< "$skipped"
+              for r in "${regions[@]}"; do
+                [[ -n "$r" ]] && ALL_SKIPPED_REGIONS+=("$r")
+              done
+            fi
           done
+
+          UNIQUE_SKIPPED=$(printf '%s\n' "${ALL_SKIPPED_REGIONS[@]}" | sort -u | tr '\n' ',')
 
           if [[ "$OVERALL" == "success" ]]; then
             HEADER="✅ Python Layer Release Succeeded"
@@ -199,11 +218,20 @@ jobs:
             HEADER="❌ Python Layer Release Failed (${FAILED_COUNT}/${TOTAL_COUNT} versions failed)"
           fi
 
-          # When all jobs failed, add a direct link block to the workflow run
           EXTRA_BLOCKS="[]"
+          if [[ -n "$UNIQUE_SKIPPED" ]]; then
+            SKIPPED_LIST=$(echo "$UNIQUE_SKIPPED" | tr ',' '\n' | grep -v '^$' | sed 's/^/• /' | tr '\n' '\n')
+            REGION_BLOCK=$(jq -n --arg text "⚠️ *Regions skipped (AWS infra errors):*\n${SKIPPED_LIST}\nThese may need a manual re-publish." \
+              '[{ type: "section", text: { type: "mrkdwn", text: $text } }]')
+            EXTRA_BLOCKS=$(jq -n --argjson a "$EXTRA_BLOCKS" --argjson b "$REGION_BLOCK" '$a + $b')
+          elif [[ "$OVERALL" == "success" ]]; then
+            EXTRA_BLOCKS=$(jq -n '[{ type: "section", text: { type: "mrkdwn", text: "✅ All regions published successfully" } }]')
+          fi
+
           if [[ "$FAILED_COUNT" -eq "$TOTAL_COUNT" && "$TOTAL_COUNT" -gt 0 ]]; then
-            EXTRA_BLOCKS=$(jq -n --arg url "$RUN_URL" \
+            ALL_FAILED=$(jq -n --arg url "$RUN_URL" \
               '[{ type: "section", text: { type: "mrkdwn", text: ("⚠️ All versions failed. <" + $url + "|View full logs here>.") } }]')
+            EXTRA_BLOCKS=$(jq -n --argjson a "$EXTRA_BLOCKS" --argjson b "$ALL_FAILED" '$a + $b')
           fi
 
           PAYLOAD=$(jq -n \

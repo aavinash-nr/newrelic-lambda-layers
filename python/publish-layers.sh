@@ -80,7 +80,12 @@ function publish_python_layer {
 
     for region in "${REGIONS[@]}"; do
         echo "Publishing layer for python${python_version} (${arch}) to region ${region}"
-        publish_layer ${ZIP} $region python${python_version} ${arch} $NEWRELIC_AGENT_VERSION
+        local result
+        publish_layer ${ZIP} $region python${python_version} ${arch} $NEWRELIC_AGENT_VERSION && result=0 || result=$?
+        if [[ $result -eq 1 ]]; then
+            echo "FATAL: Non-infrastructure error in ${region} — aborting publish"
+            exit 1
+        fi
     done
 }
 
@@ -129,7 +134,12 @@ function publish_universal_python_layer {
 
     for region in "${REGIONS[@]}"; do
         echo "Publishing universal Python layer (${arch}) to region ${region}"
-        publish_layer ${ZIP} $region python ${arch} $NEWRELIC_AGENT_VERSION
+        local result
+        publish_layer ${ZIP} $region python ${arch} $NEWRELIC_AGENT_VERSION && result=0 || result=$?
+        if [[ $result -eq 1 ]]; then
+            echo "FATAL: Non-infrastructure error in ${region} — aborting publish"
+            exit 1
+        fi
     done
 }
 
@@ -142,6 +152,7 @@ case "$1" in
     "publish-universal-python")
         publish_universal_python_layer arm64
         publish_universal_python_layer x86_64
+
         ;;
     "build-publish-universal-python-ecr-image")
         build_universal_python_layer arm64
@@ -156,6 +167,7 @@ case "$1" in
         build_universal_python_layer x86_64
         publish_universal_python_layer x86_64
         publish_docker_ecr $PY_DIST_X86_64 python x86_64
+
         ;;
     "python3.9")
         build_python_layer 3.9 arm64
@@ -164,6 +176,7 @@ case "$1" in
         build_python_layer 3.9 x86_64
         publish_python_layer 3.9 x86_64
         publish_docker_ecr $PY39_DIST_X86_64 python3.9 x86_64
+
         ;;
     "python3.10")
         build_python_layer 3.10 arm64
@@ -172,6 +185,7 @@ case "$1" in
         build_python_layer 3.10 x86_64
         publish_python_layer 3.10 x86_64
         publish_docker_ecr $PY310_DIST_X86_64 python3.10 x86_64
+
         ;;
     "python3.11")
         build_python_layer 3.11 arm64
@@ -180,6 +194,7 @@ case "$1" in
         build_python_layer 3.11 x86_64
         publish_python_layer 3.11 x86_64
         publish_docker_ecr $PY311_DIST_X86_64 python3.11 x86_64
+
         ;;
     "python3.12")
         build_python_layer 3.12 arm64
@@ -188,6 +203,7 @@ case "$1" in
         build_python_layer 3.12 x86_64
         publish_python_layer 3.12 x86_64
         publish_docker_ecr $PY312_DIST_X86_64 python3.12 x86_64
+
         ;;
     "python3.13")
         build_python_layer 3.13 arm64
@@ -196,6 +212,7 @@ case "$1" in
         build_python_layer 3.13 x86_64
         publish_python_layer 3.13 x86_64
         publish_docker_ecr $PY313_DIST_X86_64 python3.13 x86_64
+
         ;;
     "python3.14")
         build_python_layer 3.14 arm64
@@ -204,6 +221,7 @@ case "$1" in
         build_python_layer 3.14 x86_64
         publish_python_layer 3.14 x86_64
         publish_docker_ecr $PY314_DIST_X86_64 python3.14 x86_64
+
         ;;
     *)
         usage

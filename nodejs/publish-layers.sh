@@ -65,7 +65,14 @@ function publish_universal_wrapper {
   fi
 
   for region in "${REGIONS[@]}"; do
-    publish_layer $ZIP $region nodejs ${arch} $NEWRELIC_AGENT_VERSION $slim
+    echo "Publishing universal Node.js layer (${arch}) to region ${region}"
+    local result
+    publish_layer $ZIP $region nodejs ${arch} $NEWRELIC_AGENT_VERSION $slim && result=0 || result=$?
+    if [[ $result -eq 1 ]]; then
+      echo "FATAL: Non-infrastructure error in ${region} — aborting publish"
+      exit 1
+    fi
+    # result=2 means AWS infra error — region was skipped, continue to next
   done
 }
 
@@ -118,7 +125,14 @@ function publish_wrapper {
   fi
 
   for region in "${REGIONS[@]}"; do
-    publish_layer $ZIP $region nodejs${node_version}.x ${arch} $NEWRELIC_AGENT_VERSION $slim
+    echo "Publishing layer for nodejs${node_version}.x (${arch}) to region ${region}"
+    local result
+    publish_layer $ZIP $region nodejs${node_version}.x ${arch} $NEWRELIC_AGENT_VERSION $slim && result=0 || result=$?
+    if [[ $result -eq 1 ]]; then
+      echo "FATAL: Non-infrastructure error in ${region} — aborting publish"
+      exit 1
+    fi
+    # result=2 means AWS infra error — region was skipped, continue to next
   done
 }
 
@@ -134,6 +148,7 @@ case "$1" in
   publish_universal_wrapper x86_64
   publish_universal_wrapper arm64 slim
   publish_universal_wrapper x86_64 slim
+
 	;;
 "build-publish-universal-ecr-image")
   build_universal_wrapper arm64
@@ -163,9 +178,10 @@ case "$1" in
 	;;
 "publish-20")
   publish_wrapper 20 arm64
-  publish_wrapper 20 x86_64 
+  publish_wrapper 20 x86_64
   publish_wrapper 20 arm64 slim
   publish_wrapper 20 x86_64 slim
+
 	;;
 "build-22")
   build_wrapper 22 arm64 
@@ -175,9 +191,10 @@ case "$1" in
 	;;
 "publish-22")
   publish_wrapper 22 arm64
-  publish_wrapper 22 x86_64 
+  publish_wrapper 22 x86_64
   publish_wrapper 22 arm64 slim
   publish_wrapper 22 x86_64 slim
+
 	;;
 "build-24")
   build_wrapper 24 arm64 
@@ -187,9 +204,10 @@ case "$1" in
 	;;
 "publish-24")
   publish_wrapper 24 arm64
-  publish_wrapper 24 x86_64 
+  publish_wrapper 24 x86_64
   publish_wrapper 24 arm64 slim
   publish_wrapper 24 x86_64 slim
+
 	;;
 "build-publish-20-ecr-image")
   build_wrapper 20 arm64 

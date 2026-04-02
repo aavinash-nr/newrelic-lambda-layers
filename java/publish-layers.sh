@@ -66,7 +66,9 @@ function publish-java8al2-arm64 {
     fi
 
     for region in "${REGIONS[@]}"; do
-      publish_layer $JAVA8_DIST_ARM64 $region java8.al2 arm64
+      local result
+      publish_layer $JAVA8_DIST_ARM64 $region java8.al2 arm64 && result=0 || result=$?
+      if [[ $result -eq 1 ]]; then exit 1; fi
     done
 }
 
@@ -77,7 +79,9 @@ function publish-java8al2-x86 {
     fi
 
     for region in "${REGIONS[@]}"; do
-      publish_layer $JAVA8_DIST_X86_64 $region java8.al2 x86_64
+      local result
+      publish_layer $JAVA8_DIST_X86_64 $region java8.al2 x86_64 && result=0 || result=$?
+      if [[ $result -eq 1 ]]; then exit 1; fi
     done
 }
 
@@ -96,7 +100,9 @@ function publish-java11-arm64 {
     fi
 
     for region in "${REGIONS[@]}"; do
-      publish_layer $JAVA11_DIST_ARM64 $region java11 arm64
+      local result
+      publish_layer $JAVA11_DIST_ARM64 $region java11 arm64 && result=0 || result=$?
+      if [[ $result -eq 1 ]]; then exit 1; fi
     done
 }
 
@@ -107,7 +113,9 @@ function publish-java11-x86 {
     fi
 
     for region in "${REGIONS[@]}"; do
-      publish_layer $JAVA11_DIST_X86_64 $region java11 x86_64
+      local result
+      publish_layer $JAVA11_DIST_X86_64 $region java11 x86_64 && result=0 || result=$?
+      if [[ $result -eq 1 ]]; then exit 1; fi
     done
 }
 
@@ -126,7 +134,9 @@ function publish-java17-arm64 {
     fi
 
     for region in "${REGIONS[@]}"; do
-      publish_layer $JAVA17_DIST_ARM64 $region java17 arm64
+      local result
+      publish_layer $JAVA17_DIST_ARM64 $region java17 arm64 && result=0 || result=$?
+      if [[ $result -eq 1 ]]; then exit 1; fi
     done
 }
 
@@ -137,7 +147,9 @@ function publish-java17-x86 {
     fi
 
     for region in "${REGIONS[@]}"; do
-      publish_layer $JAVA17_DIST_X86_64 $region java17 x86_64
+      local result
+      publish_layer $JAVA17_DIST_X86_64 $region java17 x86_64 && result=0 || result=$?
+      if [[ $result -eq 1 ]]; then exit 1; fi
     done
 }
 
@@ -156,7 +168,9 @@ function publish-java21-arm64 {
     fi
 
     for region in "${REGIONS[@]}"; do
-      publish_layer $JAVA21_DIST_ARM64 $region java21 arm64
+      local result
+      publish_layer $JAVA21_DIST_ARM64 $region java21 arm64 && result=0 || result=$?
+      if [[ $result -eq 1 ]]; then exit 1; fi
     done
 }
 
@@ -167,7 +181,9 @@ function publish-java21-x86 {
     fi
 
     for region in "${REGIONS[@]}"; do
-      publish_layer $JAVA21_DIST_X86_64 $region java21 x86_64
+      local result
+      publish_layer $JAVA21_DIST_X86_64 $region java21 x86_64 && result=0 || result=$?
+      if [[ $result -eq 1 ]]; then exit 1; fi
     done
 }
 
