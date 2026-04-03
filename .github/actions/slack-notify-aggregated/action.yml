@@ -31,6 +31,8 @@ runs:
         GH_ACTOR:      ${{ github.actor }}
         RUN_URL:       ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
+        SLACK_WEBHOOK=$(printf '%s' "$SLACK_WEBHOOK" | tr -d '\n\r')
+
         if [[ -z "$SLACK_WEBHOOK" ]]; then
           echo "SLACK_WEBHOOK not configured — skipping Slack notification"
           exit 0
@@ -74,6 +76,11 @@ runs:
 
         UNIQUE_SKIPPED=$(printf '%s\n' "${ALL_SKIPPED_REGIONS[@]}" | sort -u | tr '\n' ',')
 
+        if [[ "$TOTAL_COUNT" -eq 0 ]]; then
+          OVERALL="failure"
+          RESULTS_TEXT="❌ Pre-flight — workflow failed before any publishing began\n"
+        fi
+
         if [[ "$OVERALL" == "success" ]]; then
           HEADER="✅ ${LANGUAGE_NAME} Layer Release Succeeded"
         else
@@ -84,7 +91,7 @@ runs:
         if [[ -n "$UNIQUE_SKIPPED" ]]; then
           SKIPPED_LIST=$(echo "$UNIQUE_SKIPPED" | tr ',' '\n' | grep -v '^$' | sed 's/^/• /')
           REGION_BLOCK=$(jq -n \
-            --arg header "⚠️ *S3 bucket unreachable (region disabled or bucket missing) — these regions were skipped:*" \
+            --arg header "⚠️ *AWS infrastructure errors — these regions were skipped (S3 inaccessible, Lambda publish failed, or region disabled):*" \
             --arg list "$SKIPPED_LIST" \
             --arg footer "Manual re-publish may be needed once the AWS issue is resolved." \
             '[{ type: "section", text: { type: "mrkdwn", text: ($header + "\n" + $list + "\n" + $footer) } }]')
@@ -127,6 +134,10 @@ runs:
             )
           }')
 
-        curl -sf -X POST "$SLACK_WEBHOOK" \
+        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SLACK_WEBHOOK" \
           -H 'Content-Type: application/json' \
-          -d "$PAYLOAD"
+          -d "$PAYLOAD") || { echo "curl failed with exit code $? (possible malformed webhook URL)"; exit 1; }
+        if [[ "$HTTP_STATUS" != "200" ]]; then
+          echo "Slack returned HTTP ${HTTP_STATUS}"
+          exit 1
+        fi
