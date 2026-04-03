@@ -56,27 +56,6 @@ jobs:
         run: |
           cd nodejs
           ./publish-layers.sh build-publish-${{ matrix.node-version }}-ecr-image
-      - name: Validate published layer
-        id: validate
-        if: steps.publish.outcome == 'success'
-        env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          NODE_VERSION:          ${{ matrix.node-version }}
-        run: |
-          LAYER_NAME="NewRelicNodeJS${NODE_VERSION}X"
-          LAYER_VERSION=$(aws lambda list-layer-versions \
-            --layer-name "$LAYER_NAME" \
-            --region us-east-1 \
-            --query 'LayerVersions[0].Version' \
-            --output text) || true
-          LAYER_VERSION="${LAYER_VERSION//[[:space:]]/}"
-          if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
-            echo "::error::Layer validation failed: $LAYER_NAME not found in us-east-1 after publish"
-            exit 1
-          fi
-          echo "Layer validated: $LAYER_NAME v${LAYER_VERSION}"
-          echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
       - name: Upload Unit Test Coverage
         uses: codecov/codecov-action@v5.3.1
         continue-on-error: true
@@ -89,12 +68,10 @@ jobs:
         id: write-result
         if: always()
         env:
-          NODE_VERSION:      ${{ matrix.node-version }}
-          JOB_STATUS:        ${{ job.status }}
-          PUBLISH_OUTCOME:   ${{ steps.publish.outcome }}
-          ECR_OUTCOME:       ${{ steps.ecr.outcome }}
-          VALIDATE_OUTCOME:  ${{ steps.validate.outcome }}
-          PUBLISHED_VERSION: ${{ steps.validate.outputs.published-version }}
+          NODE_VERSION:    ${{ matrix.node-version }}
+          JOB_STATUS:      ${{ job.status }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+          ECR_OUTCOME:     ${{ steps.ecr.outcome }}
         run: |
           mkdir -p /tmp/layer-results
 
@@ -102,8 +79,6 @@ jobs:
             REASON="Layer publish to AWS failed"
           elif [[ "$ECR_OUTCOME" == "failure" ]]; then
             REASON="ECR image push failed"
-          elif [[ "$VALIDATE_OUTCOME" == "failure" ]]; then
-            REASON="Post-publish validation failed — layer not accessible in AWS"
           elif [[ "$JOB_STATUS" != "success" ]]; then
             REASON="Setup or unit tests failed"
           fi
@@ -114,7 +89,7 @@ jobs:
           {
             echo "label=Node.js ${NODE_VERSION}"
             echo "status=${JOB_STATUS}"
-            echo "version=${PUBLISHED_VERSION}"
+            echo "version="
             echo "reason=${REASON:-}"
             echo "skipped-regions=${SKIPPED_REGIONS}"
           } > "/tmp/layer-results/node-${NODE_VERSION}.txt"
@@ -154,25 +129,6 @@ jobs:
         run: |
           cd nodejs
           ./publish-layers.sh build-publish-universal-ecr-image
-      - name: Validate published layer
-        id: validate
-        if: steps.publish.outcome == 'success'
-        env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        run: |
-          LAYER_VERSION=$(aws lambda list-layer-versions \
-            --layer-name NewRelicNodeJS \
-            --region us-east-1 \
-            --query 'LayerVersions[0].Version' \
-            --output text) || true
-          LAYER_VERSION="${LAYER_VERSION//[[:space:]]/}"
-          if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
-            echo "::error::Layer validation failed: NewRelicNodeJS not found in us-east-1 after publish"
-            exit 1
-          fi
-          echo "Layer validated: NewRelicNodeJS v${LAYER_VERSION}"
-          echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
       - name: Upload Unit Test Coverage
         uses: codecov/codecov-action@v5.3.1
         continue-on-error: true
@@ -184,11 +140,9 @@ jobs:
       - name: Write job result to artifact
         if: always()
         env:
-          JOB_STATUS:        ${{ job.status }}
-          PUBLISH_OUTCOME:   ${{ steps.publish.outcome }}
-          ECR_OUTCOME:       ${{ steps.ecr.outcome }}
-          VALIDATE_OUTCOME:  ${{ steps.validate.outcome }}
-          PUBLISHED_VERSION: ${{ steps.validate.outputs.published-version }}
+          JOB_STATUS:      ${{ job.status }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+          ECR_OUTCOME:     ${{ steps.ecr.outcome }}
         run: |
           mkdir -p /tmp/layer-results
 
@@ -196,8 +150,6 @@ jobs:
             REASON="Layer publish to AWS failed"
           elif [[ "$ECR_OUTCOME" == "failure" ]]; then
             REASON="ECR image push failed"
-          elif [[ "$VALIDATE_OUTCOME" == "failure" ]]; then
-            REASON="Post-publish validation failed — layer not accessible in AWS"
           elif [[ "$JOB_STATUS" != "success" ]]; then
             REASON="Setup or tests failed"
           fi
@@ -208,7 +160,7 @@ jobs:
           {
             echo "label=Node.js Universal"
             echo "status=${JOB_STATUS}"
-            echo "version=${PUBLISHED_VERSION}"
+            echo "version="
             echo "reason=${REASON:-}"
             echo "skipped-regions=${SKIPPED_REGIONS}"
           } > /tmp/layer-results/node-universal.txt

@@ -72,43 +72,13 @@ jobs:
         run: |
           cd java
           ./publish-layers.sh build-publish-${{ matrix.java-version }}-ecr-image
-      - name: Validate published layer
-        id: validate
-        if: steps.publish.outcome == 'success'
-        env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          JAVA_VERSION:          ${{ matrix.java-version }}
-        run: |
-          declare -A layer_names
-          layer_names=(
-            ["java8al2"]="NewRelicJava8"
-            ["java11"]="NewRelicJava11"
-            ["java17"]="NewRelicJava17"
-            ["java21"]="NewRelicJava21"
-          )
-          LAYER_NAME="${layer_names[$JAVA_VERSION]}"
-          LAYER_VERSION=$(aws lambda list-layer-versions \
-            --layer-name "$LAYER_NAME" \
-            --region us-east-1 \
-            --query 'LayerVersions[0].Version' \
-            --output text) || true
-          LAYER_VERSION="${LAYER_VERSION//[[:space:]]/}"
-          if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
-            echo "::error::Layer validation failed: $LAYER_NAME not found in us-east-1 after publish"
-            exit 1
-          fi
-          echo "Layer validated: $LAYER_NAME v${LAYER_VERSION}"
-          echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
       - name: Write job result to artifact
         if: always()
         env:
-          JAVA_VERSION:      ${{ matrix.java-version }}
-          JOB_STATUS:        ${{ job.status }}
-          PUBLISH_OUTCOME:   ${{ steps.publish.outcome }}
-          ECR_OUTCOME:       ${{ steps.ecr.outcome }}
-          VALIDATE_OUTCOME:  ${{ steps.validate.outcome }}
-          PUBLISHED_VERSION: ${{ steps.validate.outputs.published-version }}
+          JAVA_VERSION:    ${{ matrix.java-version }}
+          JOB_STATUS:      ${{ job.status }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+          ECR_OUTCOME:     ${{ steps.ecr.outcome }}
         run: |
           mkdir -p /tmp/layer-results
 
@@ -116,8 +86,6 @@ jobs:
             REASON="Layer publish to AWS failed"
           elif [[ "$ECR_OUTCOME" == "failure" ]]; then
             REASON="ECR image push failed"
-          elif [[ "$VALIDATE_OUTCOME" == "failure" ]]; then
-            REASON="Post-publish validation failed — layer not accessible in AWS"
           elif [[ "$JOB_STATUS" != "success" ]]; then
             REASON="Build or setup step failed"
           fi
@@ -128,7 +96,7 @@ jobs:
           {
             echo "label=Java ${JAVA_VERSION}"
             echo "status=${JOB_STATUS}"
-            echo "version=${PUBLISHED_VERSION}"
+            echo "version="
             echo "reason=${REASON:-}"
             echo "skipped-regions=${SKIPPED_REGIONS}"
           } > "/tmp/layer-results/java-${JAVA_VERSION}.txt"

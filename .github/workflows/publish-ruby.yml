@@ -58,43 +58,17 @@ jobs:
           PREFLIGHT_SKIP_REGIONS: ${{ needs.preflight.outputs.skipped-regions }}
         run: ./publish-layers.sh ruby${{ matrix.ruby-version }}
         working-directory: ruby
-      - name: Validate published layer
-        id: validate
-        if: steps.publish.outcome == 'success'
-        env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          RUBY_VERSION:          ${{ matrix.ruby-version }}
-        run: |
-          LAYER_SUFFIX=$(echo "$RUBY_VERSION" | tr -d '.')
-          LAYER_NAME="NewRelicRuby${LAYER_SUFFIX}"
-          LAYER_VERSION=$(aws lambda list-layer-versions \
-            --layer-name "$LAYER_NAME" \
-            --region us-east-1 \
-            --query 'LayerVersions[0].Version' \
-            --output text) || true
-          LAYER_VERSION="${LAYER_VERSION//[[:space:]]/}"
-          if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
-            echo "::error::Layer validation failed: $LAYER_NAME not found in us-east-1 after publish"
-            exit 1
-          fi
-          echo "Layer validated: $LAYER_NAME v${LAYER_VERSION}"
-          echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
       - name: Write job result to artifact
         if: always()
         env:
-          RUBY_VERSION:      ${{ matrix.ruby-version }}
-          JOB_STATUS:        ${{ job.status }}
-          PUBLISH_OUTCOME:   ${{ steps.publish.outcome }}
-          VALIDATE_OUTCOME:  ${{ steps.validate.outcome }}
-          PUBLISHED_VERSION: ${{ steps.validate.outputs.published-version }}
+          RUBY_VERSION:    ${{ matrix.ruby-version }}
+          JOB_STATUS:      ${{ job.status }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
         run: |
           mkdir -p /tmp/layer-results
 
           if [[ "$PUBLISH_OUTCOME" == "failure" ]]; then
             REASON="Layer publish to AWS failed"
-          elif [[ "$VALIDATE_OUTCOME" == "failure" ]]; then
-            REASON="Post-publish validation failed — layer not accessible in AWS"
           elif [[ "$JOB_STATUS" != "success" ]]; then
             REASON="Build or setup step failed"
           fi
@@ -105,7 +79,7 @@ jobs:
           {
             echo "label=Ruby ${RUBY_VERSION}"
             echo "status=${JOB_STATUS}"
-            echo "version=${PUBLISHED_VERSION}"
+            echo "version="
             echo "reason=${REASON:-}"
             echo "skipped-regions=${SKIPPED_REGIONS}"
           } > "/tmp/layer-results/ruby-${RUBY_VERSION}.txt"

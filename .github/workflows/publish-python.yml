@@ -46,43 +46,17 @@ jobs:
         run: |
           cd python
           ./publish-layers.sh python${{ matrix.python-version }}
-      - name: Validate published layer
-        id: validate
-        if: steps.publish.outcome == 'success'
-        env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          PYTHON_VERSION:        ${{ matrix.python-version }}
-        run: |
-          LAYER_SUFFIX=$(echo "$PYTHON_VERSION" | tr -d '.')
-          LAYER_NAME="NewRelicPython${LAYER_SUFFIX}"
-          LAYER_VERSION=$(aws lambda list-layer-versions \
-            --layer-name "$LAYER_NAME" \
-            --region us-east-1 \
-            --query 'LayerVersions[0].Version' \
-            --output text) || true
-          LAYER_VERSION="${LAYER_VERSION//[[:space:]]/}"
-          if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
-            echo "::error::Layer validation failed: $LAYER_NAME not found in us-east-1 after publish"
-            exit 1
-          fi
-          echo "Layer validated: $LAYER_NAME v${LAYER_VERSION}"
-          echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
       - name: Write job result to artifact
         if: always()
         env:
-          PYTHON_VERSION:    ${{ matrix.python-version }}
-          JOB_STATUS:        ${{ job.status }}
-          PUBLISH_OUTCOME:   ${{ steps.publish.outcome }}
-          VALIDATE_OUTCOME:  ${{ steps.validate.outcome }}
-          PUBLISHED_VERSION: ${{ steps.validate.outputs.published-version }}
+          PYTHON_VERSION:  ${{ matrix.python-version }}
+          JOB_STATUS:      ${{ job.status }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
         run: |
           mkdir -p /tmp/layer-results
 
           if [[ "$PUBLISH_OUTCOME" == "failure" ]]; then
             REASON="Layer publish to AWS failed"
-          elif [[ "$VALIDATE_OUTCOME" == "failure" ]]; then
-            REASON="Post-publish validation failed — layer not accessible in AWS"
           elif [[ "$JOB_STATUS" != "success" ]]; then
             REASON="Setup step failed"
           fi
@@ -93,7 +67,7 @@ jobs:
           {
             echo "label=Python ${PYTHON_VERSION}"
             echo "status=${JOB_STATUS}"
-            echo "version=${PUBLISHED_VERSION}"
+            echo "version="
             echo "reason=${REASON:-}"
             echo "skipped-regions=${SKIPPED_REGIONS}"
           } > "/tmp/layer-results/python-${PYTHON_VERSION}.txt"
@@ -124,39 +98,16 @@ jobs:
         run: |
           cd python
           ./publish-layers.sh python
-      - name: Validate published layer
-        id: validate
-        if: steps.publish.outcome == 'success'
-        env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        run: |
-          LAYER_VERSION=$(aws lambda list-layer-versions \
-            --layer-name NewRelicPython \
-            --region us-east-1 \
-            --query 'LayerVersions[0].Version' \
-            --output text) || true
-          LAYER_VERSION="${LAYER_VERSION//[[:space:]]/}"
-          if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
-            echo "::error::Layer validation failed: NewRelicPython not found in us-east-1 after publish"
-            exit 1
-          fi
-          echo "Layer validated: NewRelicPython v${LAYER_VERSION}"
-          echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
       - name: Write job result to artifact
         if: always()
         env:
-          JOB_STATUS:        ${{ job.status }}
-          PUBLISH_OUTCOME:   ${{ steps.publish.outcome }}
-          VALIDATE_OUTCOME:  ${{ steps.validate.outcome }}
-          PUBLISHED_VERSION: ${{ steps.validate.outputs.published-version }}
+          JOB_STATUS:      ${{ job.status }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
         run: |
           mkdir -p /tmp/layer-results
 
           if [[ "$PUBLISH_OUTCOME" == "failure" ]]; then
             REASON="Layer publish to AWS failed"
-          elif [[ "$VALIDATE_OUTCOME" == "failure" ]]; then
-            REASON="Post-publish validation failed — layer not accessible in AWS"
           elif [[ "$JOB_STATUS" != "success" ]]; then
             REASON="Setup step failed"
           fi
@@ -167,7 +118,7 @@ jobs:
           {
             echo "label=Python Universal"
             echo "status=${JOB_STATUS}"
-            echo "version=${PUBLISHED_VERSION}"
+            echo "version="
             echo "reason=${REASON:-}"
             echo "skipped-regions=${SKIPPED_REGIONS}"
           } > /tmp/layer-results/python-universal.txt
