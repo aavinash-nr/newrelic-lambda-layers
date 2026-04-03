@@ -9,29 +9,19 @@ jobs:
   preflight:
     runs-on: ubuntu-latest
     outputs:
-      tag-match:       ${{ steps.check-tag.outputs.match }}
-      skipped-regions: ${{ steps.run.outputs.skipped-regions }}
+      tag-match:       ${{ steps.preflight.outputs.tag-match }}
+      skipped-regions: ${{ steps.preflight.outputs.skipped-regions }}
     steps:
       - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # pin@v4
-      - name: Check Tag
-        id: check-tag
-        env:
-          GIT_REF: ${{ github.event.ref }}
-        run: |
-          if [[ "$GIT_REF" =~ ^refs/tags/v[0-9]+(\.[0-9]+)*_java$ ]]; then
-            echo "match=true" >> $GITHUB_OUTPUT
-          fi
-      - name: Pre-flight check (credentials + S3 buckets)
-        id: run
-        if: steps.check-tag.outputs.match == 'true'
-        env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          BUCKET_NAME_PREFIX:    ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
-        run: |
-          source libBuild.sh
-          preflight_check
-          echo "skipped-regions=$(IFS=,; echo "${PREFLIGHT_SKIP[*]}")" >> $GITHUB_OUTPUT
+      - name: Run pre-flight checks
+        id: preflight
+        uses: ./.github/actions/preflight
+        with:
+          tag-pattern:           '^refs/tags/v[0-9]+(\.[0-9]+)*_java$'
+          artifact-key:          java
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          bucket-name-prefix:    ${{ vars.BUCKET_NAME_PREFIX || 'nr-layers' }}
 
   publish-java:
     runs-on: ubuntu-latest
