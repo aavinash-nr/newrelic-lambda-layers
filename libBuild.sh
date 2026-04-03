@@ -57,20 +57,23 @@ function region_should_skip {
 }
 
 # Pre-flight checks run ONCE before any publishing begins:
-#   1. Validate AWS credentials (fatal — if this fails nothing will work)
-#   2. For each region: S3 bucket exists and is accessible (head-bucket)
-#   3. For each region: S3 bucket is writable (put-object probe, then delete)
-#   4. For each region: Lambda API is reachable (get-account-settings)
+#   1. Validate AWS credentials (fatal)
+#   2. ECR Public auth reachable (fatal — global, us-east-1 only)
+#   3. For each region: S3 bucket exists and is accessible (head-bucket)
+#   4. For each region: S3 bucket is writable (put-object probe, then delete)
+#   5. For each region: Lambda API is reachable (get-account-settings)
+# All AWS CLI calls use --cli-connect-timeout 5 --cli-read-timeout 10 to
+# fail fast during regional outages instead of hanging for 30-60 seconds.
 # Regions that fail any per-region check are added to PREFLIGHT_SKIP and
 # never attempted. Only the AWS error code is logged — no ARNs, account IDs,
 # bucket names, or message bodies are printed.
 function preflight_check {
   echo "=== Pre-flight checks ==="
 
-  # 1. Credentials — fatal if invalid; write a result artifact so the notify
-  #    job can report the failure even though all publish jobs are skipped.
+  # 1. Credentials — fatal; write result artifact so notify job can report it.
   local creds_output
-  creds_output=$(aws sts get-caller-identity 2>&1) || {
+  creds_output=$(aws --cli-connect-timeout 5 --cli-read-timeout 10 \
+    sts get-caller-identity 2>&1) || {
     local err_code
     err_code=$(aws_error_code "$creds_output")
     echo "FATAL: AWS credentials check failed (${err_code})." >&2
@@ -84,23 +87,43 @@ function preflight_check {
   }
   echo "Credentials OK"
 
+  # 2. ECR Public auth — fatal; stdout is the auth token so discard it,
+  #    capture only stderr for the error code.
+  local ecr_err
+  if ! ecr_err=$(aws --cli-connect-timeout 5 --cli-read-timeout 10 \
+      ecr-public get-login-password --region us-east-1 2>&1 >/dev/null); then
+    local err_code
+    err_code=$(aws_error_code "$ecr_err")
+    echo "FATAL: ECR Public auth failed (${err_code})." >&2
+    mkdir -p /tmp/layer-results
+    {
+      echo "label=Pre-flight"
+      echo "status=failure"
+      echo "reason=ECR Public auth failed (${err_code})"
+    } > /tmp/layer-results/preflight-failure.txt
+    exit 1
+  fi
+  echo "ECR Public auth OK"
+
   local region
   for region in "${REGIONS[@]}"; do
     local bucket="${BUCKET_NAME_PREFIX}-${region}"
 
-    # 2. S3 bucket accessible
+    # 3. S3 bucket accessible
     local s3_output
-    if ! s3_output=$(aws s3api head-bucket --bucket "$bucket" --region "$region" 2>&1); then
+    if ! s3_output=$(aws --cli-connect-timeout 5 --cli-read-timeout 10 \
+        s3api head-bucket --bucket "$bucket" --region "$region" 2>&1); then
       echo "  [SKIP] ${region} — S3 bucket not accessible ($(aws_error_code "$s3_output"))"
       PREFLIGHT_SKIP+=("$region")
       SKIPPED_REGIONS+=("${region} (pre-flight: S3 bucket not accessible)")
       continue
     fi
 
-    # 3. S3 bucket writable
+    # 4. S3 bucket writable
     local probe_key="preflight-probe-$$"
     local s3w_output
-    if ! s3w_output=$(aws s3api put-object \
+    if ! s3w_output=$(aws --cli-connect-timeout 5 --cli-read-timeout 10 \
+        s3api put-object \
         --bucket "$bucket" --key "$probe_key" --body /dev/null \
         --region "$region" 2>&1); then
       echo "  [SKIP] ${region} — S3 bucket not writable ($(aws_error_code "$s3w_output"))"
@@ -109,13 +132,15 @@ function preflight_check {
       continue
     fi
     # Clean up probe object; ignore errors (best-effort)
-    aws s3api delete-object --bucket "$bucket" --key "$probe_key" \
+    aws --cli-connect-timeout 5 --cli-read-timeout 10 \
+      s3api delete-object --bucket "$bucket" --key "$probe_key" \
       --region "$region" 2>/dev/null || true
     echo "  [OK]   ${region} — S3 accessible and writable"
 
-    # 4. Lambda API reachable
+    # 5. Lambda API reachable
     local lambda_output
-    if ! lambda_output=$(aws lambda get-account-settings --region "$region" 2>&1); then
+    if ! lambda_output=$(aws --cli-connect-timeout 5 --cli-read-timeout 10 \
+        lambda get-account-settings --region "$region" 2>&1); then
       echo "  [SKIP] ${region} — Lambda API not accessible ($(aws_error_code "$lambda_output"))"
       PREFLIGHT_SKIP+=("$region")
       SKIPPED_REGIONS+=("${region} (pre-flight: Lambda API not accessible)")
