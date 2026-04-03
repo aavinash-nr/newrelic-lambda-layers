@@ -120,7 +120,7 @@ function preflight_check {
     fi
 
     # 4. S3 bucket writable
-    local probe_key="preflight-probe-$$"
+    local probe_key=".preflight-probe"
     local s3w_output
     if ! s3w_output=$(aws --cli-connect-timeout 5 --cli-read-timeout 10 \
         s3api put-object \
@@ -151,6 +151,21 @@ function preflight_check {
 
   local skip_count=${#PREFLIGHT_SKIP[@]}
   local total=${#REGIONS[@]}
+
+  # If more than half of all regions failed, treat it as a systemic issue
+  # (e.g. bad credentials, account suspended, widespread outage) — fail fast
+  # rather than attempting a partial publish.
+  if [[ $total -gt 0 && $skip_count -gt $(( total / 2 )) ]]; then
+    echo "FATAL: ${skip_count}/${total} regions failed pre-flight — likely a systemic AWS or credentials issue." >&2
+    mkdir -p /tmp/layer-results
+    {
+      echo "label=Pre-flight"
+      echo "status=failure"
+      echo "reason=${skip_count}/${total} regions failed pre-flight (systemic issue)"
+    } > /tmp/layer-results/preflight-failure.txt
+    exit 1
+  fi
+
   echo "Pre-flight complete: $(( total - skip_count ))/${total} regions ready, ${skip_count} skipped"
   echo "========================="
 }
