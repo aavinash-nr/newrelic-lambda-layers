@@ -101,7 +101,9 @@ function report_skipped_regions {
     mkdir -p /tmp/layer-results
     for entry in "${SKIPPED_REGIONS[@]}"; do
       echo "  - ${entry}"
-      echo "${entry}" >> /tmp/layer-results/skipped-regions.txt
+      # Write only the region name to the file — detail stays in workflow logs.
+      # Slack uses this file to show a clean list of region names.
+      echo "${entry%% *}" >> /tmp/layer-results/skipped-regions.txt
     done
     echo "These regions may need a manual re-publish once the AWS issues are resolved."
     echo "========================================="

@@ -31,6 +31,11 @@ runs:
         GH_ACTOR:      ${{ github.actor }}
         RUN_URL:       ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
+        if [[ -z "$SLACK_WEBHOOK" ]]; then
+          echo "SLACK_WEBHOOK not configured — skipping Slack notification"
+          exit 0
+        fi
+
         OVERALL="success"
         RESULTS_TEXT=""
         FAILED_COUNT=0
@@ -77,9 +82,12 @@ runs:
 
         EXTRA_BLOCKS="[]"
         if [[ -n "$UNIQUE_SKIPPED" ]]; then
-          SKIPPED_LIST=$(echo "$UNIQUE_SKIPPED" | tr ',' '\n' | grep -v '^$' | sed 's/^/• /' | tr '\n' '\n')
-          REGION_BLOCK=$(jq -n --arg text "⚠️ *Regions skipped (AWS infra errors):*\n${SKIPPED_LIST}\nThese may need a manual re-publish." \
-            '[{ type: "section", text: { type: "mrkdwn", text: $text } }]')
+          SKIPPED_LIST=$(echo "$UNIQUE_SKIPPED" | tr ',' '\n' | grep -v '^$' | sed 's/^/• /')
+          REGION_BLOCK=$(jq -n \
+            --arg header "⚠️ *S3 bucket unreachable (region disabled or bucket missing) — these regions were skipped:*" \
+            --arg list "$SKIPPED_LIST" \
+            --arg footer "Manual re-publish may be needed once the AWS issue is resolved." \
+            '[{ type: "section", text: { type: "mrkdwn", text: ($header + "\n" + $list + "\n" + $footer) } }]')
           EXTRA_BLOCKS=$(jq -n --argjson a "$EXTRA_BLOCKS" --argjson b "$REGION_BLOCK" '$a + $b')
         elif [[ "$OVERALL" == "success" ]]; then
           EXTRA_BLOCKS=$(jq -n '[{ type: "section", text: { type: "mrkdwn", text: "✅ All regions published successfully" } }]')

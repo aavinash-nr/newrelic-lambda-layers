@@ -57,6 +57,8 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64, amd64
+      - name: Prepare results directory
+        run: mkdir -p /tmp/layer-results
       - name: Build and Publish layer
         id: publish
         env:
@@ -81,6 +83,7 @@ jobs:
             --region us-east-1 \
             --query 'LayerVersions[0].Version' \
             --output text) || true
+          LAYER_VERSION="${LAYER_VERSION//[[:space:]]/}"
           if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
             echo "::error::Layer validation failed: $LAYER_NAME not found in us-east-1 after publish"
             exit 1

@@ -80,6 +80,7 @@ jobs:
             --region us-east-1 \
             --query 'LayerVersions[0].Version' \
             --output text) || true
+          LAYER_VERSION="${LAYER_VERSION//[[:space:]]/}"
           if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
             echo "::error::Layer validation failed: $LAYER_NAME not found in us-east-1 after publish"
             exit 1
@@ -88,6 +89,7 @@ jobs:
           echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
       - name: Upload Unit Test Coverage
         uses: codecov/codecov-action@v5.3.1
+        continue-on-error: true
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./nodejs/coverage/unit/lcov.info
@@ -174,6 +176,7 @@ jobs:
             --region us-east-1 \
             --query 'LayerVersions[0].Version' \
             --output text) || true
+          LAYER_VERSION="${LAYER_VERSION//[[:space:]]/}"
           if [[ -z "$LAYER_VERSION" || "$LAYER_VERSION" == "None" ]]; then
             echo "::error::Layer validation failed: NewRelicNodeJS not found in us-east-1 after publish"
             exit 1
@@ -182,6 +185,7 @@ jobs:
           echo "published-version=${LAYER_VERSION}" >> $GITHUB_OUTPUT
       - name: Upload Unit Test Coverage
         uses: codecov/codecov-action@v5.3.1
+        continue-on-error: true
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./nodejs/coverage/unit/lcov.info
