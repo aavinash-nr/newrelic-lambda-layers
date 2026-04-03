@@ -31,8 +31,6 @@ runs:
         GH_ACTOR:      ${{ github.actor }}
         RUN_URL:       ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
-        SLACK_WEBHOOK=$(printf '%s' "$SLACK_WEBHOOK" | tr -d '\n\r')
-
         if [[ -z "$SLACK_WEBHOOK" ]]; then
           echo "SLACK_WEBHOOK not configured — skipping Slack notification"
           exit 0
@@ -83,6 +81,8 @@ runs:
 
         if [[ "$OVERALL" == "success" ]]; then
           HEADER="✅ ${LANGUAGE_NAME} Layer Release Succeeded"
+        elif [[ "$TOTAL_COUNT" -eq 0 ]]; then
+          HEADER="❌ ${LANGUAGE_NAME} Layer Release Failed — Pre-flight checks failed"
         else
           HEADER="❌ ${LANGUAGE_NAME} Layer Release Failed (${FAILED_COUNT}/${TOTAL_COUNT} versions failed)"
         fi
