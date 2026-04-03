@@ -93,8 +93,8 @@ jobs:
 
   notify:
     runs-on: ubuntu-latest
-    needs: [publish-ruby]
-    if: always()
+    needs: [preflight, publish-ruby]
+    if: always() && needs.preflight.outputs.tag-match == 'true'
     steps:
       - uses: actions/checkout@v4
       - name: Send aggregated Slack notification

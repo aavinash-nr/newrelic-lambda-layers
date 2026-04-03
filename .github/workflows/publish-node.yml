@@ -174,8 +174,8 @@ jobs:
 
   notify:
     runs-on: ubuntu-latest
-    needs: [publish-node, publish-node-universal]
-    if: always()
+    needs: [preflight, publish-node, publish-node-universal]
+    if: always() && needs.preflight.outputs.tag-match == 'true'
     steps:
       - uses: actions/checkout@v4
       - name: Send aggregated Slack notification

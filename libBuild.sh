@@ -20,12 +20,20 @@ fi
 
 # Extracts only the AWS error code from CLI output, e.g. "AccessDenied" from
 # "An error occurred (AccessDenied) when calling the HeadBucket operation: ..."
-# Falls back to "unknown error" if no code found. Never leaks ARNs, account
-# IDs, bucket names, or other sensitive details from the error message body.
+# First tries the canonical AWS CLI error format to avoid false positives from
+# other parenthesized words in SSL/curl/timeout error messages (e.g. "(certificate
+# verify failed)" would otherwise extract "certificate"). Falls back to any
+# parenthesized token if the specific format is not present (e.g. connection errors).
+# Never leaks ARNs, account IDs, bucket names, or message bodies.
 function aws_error_code {
   local output="$1"
   local code
-  code=$(echo "$output" | grep -oP '(?<=\()[A-Za-z][A-Za-z0-9]+(?=\))' | head -1 || true)
+  # Primary: match the standard AWS CLI "An error occurred (Code)" pattern
+  code=$(echo "$output" | grep -oP 'error occurred \(\K[A-Za-z][A-Za-z0-9]+(?=\))' | head -1 || true)
+  # Fallback: any parenthesized word (catches curl/connection error codes)
+  if [[ -z "$code" ]]; then
+    code=$(echo "$output" | grep -oP '(?<=\()[A-Za-z][A-Za-z0-9]+(?=\))' | head -1 || true)
+  fi
   echo "${code:-unknown error}"
 }
 
@@ -602,10 +610,17 @@ function publish_layer {
       return 2
     fi
 
-   if [[ ${REGIONS[*]} =~ $region ]];
-   then arch_flag="--compatible-architectures $arch"
-   else arch_flag=""
-   fi
+   # Check whether $region is in the REGIONS array using exact element matching.
+   # The old pattern ([[ ${REGIONS[*]} =~ $region ]]) used substring match on the
+   # joined string, which could incorrectly match a region name that is a substring
+   # of another (e.g. "us-east-1" matching inside "us-east-10" if it existed).
+   arch_flag=""
+   for _r in "${REGIONS[@]}"; do
+     if [[ "$_r" == "$region" ]]; then
+       arch_flag="--compatible-architectures $arch"
+       break
+     fi
+   done
 
     base_description="New Relic Layer for ${runtime_name} (${arch})"
     extension_info=" with New Relic Extension v${EXTENSION_VERSION}"
@@ -698,8 +713,19 @@ function publish_docker_ecr {
     # copy dockerfile
     cp ../Dockerfile.ecrImage .
 
-    echo "Running : aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws/${repository}"
-    aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws/${repository}
+    # Authenticate with ECR Public. Add timeouts so a regional outage doesn't stall
+    # the build indefinitely. Check auth explicitly before piping to docker login so
+    # a failed token fetch produces a clear error rather than a confusing docker error.
+    echo "Authenticating with ECR Public (public.ecr.aws/${repository})..."
+    local ecr_err
+    if ! ecr_err=$(aws --cli-connect-timeout 5 --cli-read-timeout 10 \
+        ecr-public get-login-password --region us-east-1 2>&1 >/dev/null); then
+      echo "ERROR: ECR Public auth failed ($(aws_error_code "$ecr_err"))" >&2
+      return 1
+    fi
+    aws --cli-connect-timeout 5 --cli-read-timeout 10 \
+      ecr-public get-login-password --region us-east-1 \
+      | docker login --username AWS --password-stdin "public.ecr.aws/${repository}"
 
     echo "docker buildx build --platform ${platform} -t layer-nr-image-${language_flag}-${version_flag}${arch_flag}${slim}:latest \
     -f Dockerfile.ecrImage \

@@ -21,11 +21,15 @@ inputs:
 
 outputs:
   tag-match:
-    description: 'true if the git tag matches the expected pattern'
+    description: 'true if the git tag matches the expected pattern, false otherwise'
     value: ${{ steps.check-tag.outputs.match }}
   skipped-regions:
-    description: 'Comma-separated list of regions that failed pre-flight'
-    value: ${{ steps.run.outputs.skipped-regions }}
+    description: >
+      Comma-separated list of regions that failed pre-flight checks.
+      Empty string when tag-match is false (run-checks step is skipped);
+      callers should treat empty as "no regions to skip" which is safe because
+      publish jobs are gated on tag-match == 'true' and never run when this is empty.
+    value: ${{ steps.run-checks.outputs.skipped-regions }}
 
 runs:
   using: composite
@@ -48,7 +52,7 @@ runs:
       run: mkdir -p /tmp/layer-results
 
     - name: Pre-flight check (credentials + S3 + Lambda API)
-      id: run
+      id: run-checks
       if: steps.check-tag.outputs.match == 'true'
       shell: bash
       env:

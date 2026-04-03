@@ -146,10 +146,19 @@ runs:
             )
           }')
 
-        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SLACK_WEBHOOK" \
+        # Slack's incoming webhook returns HTTP 200 even for malformed payloads,
+        # with a plain-text body like "invalid_payload" or "no_service".
+        # Capture both the body and status code so we can check both.
+        SLACK_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$SLACK_WEBHOOK" \
           -H 'Content-Type: application/json' \
-          -d "$PAYLOAD") || { echo "curl failed with exit code $? (possible malformed webhook URL)"; exit 1; }
+          -d "$PAYLOAD") || { echo "curl failed (possible malformed webhook URL)"; exit 1; }
+        HTTP_STATUS=$(echo "$SLACK_RESPONSE" | tail -1)
+        RESPONSE_BODY=$(echo "$SLACK_RESPONSE" | head -1)
         if [[ "$HTTP_STATUS" != "200" ]]; then
           echo "Slack returned HTTP ${HTTP_STATUS}"
+          exit 1
+        fi
+        if [[ "$RESPONSE_BODY" != "ok" ]]; then
+          echo "Slack API error: ${RESPONSE_BODY}"
           exit 1
         fi
