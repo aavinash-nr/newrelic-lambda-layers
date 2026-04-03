@@ -40,9 +40,13 @@ runs:
         RESULTS_TEXT=""
         FAILED_COUNT=0
         TOTAL_COUNT=0
+        HAS_PREFLIGHT_FAILURE=false
         ALL_SKIPPED_REGIONS=()
 
-        for f in $(ls /tmp/layer-results/*.txt 2>/dev/null | sort); do
+        # Glob expansion is safe here: artifact filenames are controlled by the workflow
+        # and never contain spaces. Using a glob avoids the word-splitting and ls-parsing
+        # antipattern of for f in $(ls ...).
+        for f in /tmp/layer-results/*.txt; do
           [[ -f "$f" ]] || continue
           TOTAL_COUNT=$((TOTAL_COUNT + 1))
 
@@ -51,6 +55,14 @@ runs:
           version=$(grep '^version=' "$f" | cut -d= -f2-)
           reason=$(grep '^reason=' "$f" | cut -d= -f2-)
           skipped=$(grep '^skipped-regions=' "$f" | cut -d= -f2-)
+
+          # Track whether a pre-flight failure artifact was among the results.
+          # The preflight artifact name matches the notify glob (layer-result-*-preflight)
+          # so it is always downloaded and parsed here — use the label to identify it
+          # and show a more specific header than "N/N versions failed".
+          if [[ "$label" == "Pre-flight" ]]; then
+            HAS_PREFLIGHT_FAILURE=true
+          fi
 
           if [[ "$status" == "success" ]]; then
             [[ -n "$version" ]] \
@@ -81,7 +93,7 @@ runs:
 
         if [[ "$OVERALL" == "success" ]]; then
           HEADER="✅ ${LANGUAGE_NAME} Layer Release Succeeded"
-        elif [[ "$TOTAL_COUNT" -eq 0 ]]; then
+        elif [[ "$TOTAL_COUNT" -eq 0 || "$HAS_PREFLIGHT_FAILURE" == "true" ]]; then
           HEADER="❌ ${LANGUAGE_NAME} Layer Release Failed — Pre-flight checks failed"
         else
           HEADER="❌ ${LANGUAGE_NAME} Layer Release Failed (${FAILED_COUNT}/${TOTAL_COUNT} versions failed)"

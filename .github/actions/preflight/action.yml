@@ -39,6 +39,8 @@ runs:
       run: |
         if [[ "$GIT_REF" =~ $TAG_PATTERN ]]; then
           echo "match=true" >> $GITHUB_OUTPUT
+        else
+          echo "match=false" >> $GITHUB_OUTPUT
         fi
 
     - name: Prepare results directory
@@ -64,4 +66,5 @@ runs:
       with:
         name: layer-result-${{ inputs.artifact-key }}-preflight
         path: /tmp/layer-results/preflight-failure.txt
+        if-no-files-found: ignore
         retention-days: 1

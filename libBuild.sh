@@ -60,6 +60,12 @@ function region_should_skip {
 # Writes "ok" or "skip:<reason>" to $out_file. Uses aws_error_code for safe
 # error reporting — no ARNs, account IDs, or bucket names are emitted.
 function _preflight_check_region {
+  # Disable errexit inside this function: all error paths are handled explicitly
+  # via "if !" guards. Without this, any unguarded command added in the future
+  # would silently kill the background subshell before writing to $out_file,
+  # producing a misleading "timed out or crashed" result in the parent.
+  set +e
+
   local region="$1"
   local bucket_prefix="$2"
   local out_file="$3"
@@ -130,6 +136,11 @@ function preflight_check {
 
   # 2. ECR Public auth — fatal; stdout is the auth token so discard it,
   #    capture only stderr for the error code.
+  #    Inside $(), stdout is already the capture pipe. Redirect order:
+  #      2>&1  → stderr joins the capture pipe (so error text lands in ecr_err)
+  #      >/dev/null → stdout (the token) is discarded
+  #    Do NOT swap the order: >/dev/null 2>&1 would send stderr to /dev/null too,
+  #    leaving ecr_err empty and aws_error_code returning "unknown error" on failure.
   local ecr_err
   if ! ecr_err=$(aws --cli-connect-timeout 5 --cli-read-timeout 10 \
       ecr-public get-login-password --region us-east-1 2>&1 >/dev/null); then
@@ -180,15 +191,20 @@ function preflight_check {
     fi
   done
 
-  rm -rf "$tmp_dir"
-
   local skip_count=${#PREFLIGHT_SKIP[@]}
   local total=${#REGIONS[@]}
+
+  # Cleanup temp dir regardless of outcome — placed here so it runs before
+  # the early exit below, not after it (which would leak the directory).
+  rm -rf "$tmp_dir"
 
   # If more than half of all regions failed, treat it as a systemic issue
   # (e.g. bad credentials, account suspended, widespread outage) — fail fast
   # rather than attempting a partial publish.
-  if [[ $total -gt 0 && $skip_count -gt $(( total / 2 )) ]]; then
+  # Using skip_count*2 > total instead of skip_count > total/2 to avoid integer
+  # division truncation ambiguity on odd region counts (both are equivalent, but
+  # the multiplication form makes the "more than half" intent unambiguous).
+  if [[ $total -gt 0 && $(( skip_count * 2 )) -gt $total ]]; then
     echo "FATAL: ${skip_count}/${total} regions failed pre-flight — likely a systemic AWS or credentials issue." >&2
     mkdir -p /tmp/layer-results
     {
