@@ -18,6 +18,17 @@ if [[ -n "${PREFLIGHT_SKIP_REGIONS:-}" ]]; then
   IFS=',' read -ra PREFLIGHT_SKIP <<< "$PREFLIGHT_SKIP_REGIONS"
 fi
 
+# Extracts only the AWS error code from CLI output, e.g. "AccessDenied" from
+# "An error occurred (AccessDenied) when calling the HeadBucket operation: ..."
+# Falls back to "unknown error" if no code found. Never leaks ARNs, account
+# IDs, bucket names, or other sensitive details from the error message body.
+function aws_error_code {
+  local output="$1"
+  local code
+  code=$(echo "$output" | grep -oP '(?<=\()[A-Za-z][A-Za-z0-9]+(?=\))' | head -1 || true)
+  echo "${code:-unknown error}"
+}
+
 # Runs an AWS CLI command for a specific region.
 # Any failure is treated as a regional issue — exit code 2 (skip this region).
 # On success, returns 0.
@@ -32,10 +43,7 @@ function run_aws_for_region {
     return 0
   fi
 
-  local safe_output
-  safe_output=$(echo "$output" | grep -vi -E "(secret|password|token|credential)" || true)
-  echo "WARNING: AWS command failed for region — will skip:" >&2
-  echo "$safe_output" >&2
+  echo "WARNING: AWS command failed for region ($(aws_error_code "$output")) — will skip" >&2
   return 2
 }
 
@@ -50,34 +58,70 @@ function region_should_skip {
 
 # Pre-flight checks run ONCE before any publishing begins:
 #   1. Validate AWS credentials (fatal — if this fails nothing will work)
-#   2. For each region: verify the S3 bucket exists and is accessible
-# Regions that fail pre-flight are added to PREFLIGHT_SKIP so they are
-# never attempted, and the reason is surfaced in Slack via SKIPPED_REGIONS.
+#   2. For each region: S3 bucket exists and is accessible (head-bucket)
+#   3. For each region: S3 bucket is writable (put-object probe, then delete)
+#   4. For each region: Lambda API is reachable (get-account-settings)
+# Regions that fail any per-region check are added to PREFLIGHT_SKIP and
+# never attempted. Only the AWS error code is logged — no ARNs, account IDs,
+# bucket names, or message bodies are printed.
 function preflight_check {
   echo "=== Pre-flight checks ==="
 
-  # 1. Credentials — fatal if invalid
-  local caller_identity
-  caller_identity=$(aws sts get-caller-identity 2>&1) || {
-    echo "FATAL: AWS credentials are invalid or missing." >&2
+  # 1. Credentials — fatal if invalid; write a result artifact so the notify
+  #    job can report the failure even though all publish jobs are skipped.
+  local creds_output
+  creds_output=$(aws sts get-caller-identity 2>&1) || {
+    local err_code
+    err_code=$(aws_error_code "$creds_output")
+    echo "FATAL: AWS credentials check failed (${err_code})." >&2
+    mkdir -p /tmp/layer-results
+    {
+      echo "label=Pre-flight"
+      echo "status=failure"
+      echo "reason=AWS credentials invalid or missing (${err_code})"
+    } > /tmp/layer-results/preflight-failure.txt
     exit 1
   }
   echo "Credentials OK"
 
-  # 2. Per-region S3 bucket check
   local region
   for region in "${REGIONS[@]}"; do
     local bucket="${BUCKET_NAME_PREFIX}-${region}"
-    local check_output
-    check_output=$(aws s3api head-bucket --bucket "$bucket" --region "$region" 2>&1) && {
-      echo "  [OK]   ${region} — s3://${bucket} accessible"
-    } || {
-      local safe_output
-      safe_output=$(echo "$check_output" | grep -vi -E "(secret|password|token|credential)" || true)
-      echo "  [SKIP] ${region} — ${safe_output}"
+
+    # 2. S3 bucket accessible
+    local s3_output
+    if ! s3_output=$(aws s3api head-bucket --bucket "$bucket" --region "$region" 2>&1); then
+      echo "  [SKIP] ${region} — S3 bucket not accessible ($(aws_error_code "$s3_output"))"
       PREFLIGHT_SKIP+=("$region")
-      SKIPPED_REGIONS+=("${region} (pre-flight: s3://${bucket} not accessible)")
-    }
+      SKIPPED_REGIONS+=("${region} (pre-flight: S3 bucket not accessible)")
+      continue
+    fi
+
+    # 3. S3 bucket writable
+    local probe_key="preflight-probe-$$"
+    local s3w_output
+    if ! s3w_output=$(aws s3api put-object \
+        --bucket "$bucket" --key "$probe_key" --body /dev/null \
+        --region "$region" 2>&1); then
+      echo "  [SKIP] ${region} — S3 bucket not writable ($(aws_error_code "$s3w_output"))"
+      PREFLIGHT_SKIP+=("$region")
+      SKIPPED_REGIONS+=("${region} (pre-flight: S3 bucket not writable)")
+      continue
+    fi
+    # Clean up probe object; ignore errors (best-effort)
+    aws s3api delete-object --bucket "$bucket" --key "$probe_key" \
+      --region "$region" 2>/dev/null || true
+    echo "  [OK]   ${region} — S3 accessible and writable"
+
+    # 4. Lambda API reachable
+    local lambda_output
+    if ! lambda_output=$(aws lambda get-account-settings --region "$region" 2>&1); then
+      echo "  [SKIP] ${region} — Lambda API not accessible ($(aws_error_code "$lambda_output"))"
+      PREFLIGHT_SKIP+=("$region")
+      SKIPPED_REGIONS+=("${region} (pre-flight: Lambda API not accessible)")
+      continue
+    fi
+    echo "  [OK]   ${region} — Lambda API accessible"
   done
 
   local skip_count=${#PREFLIGHT_SKIP[@]}
