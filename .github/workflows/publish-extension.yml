@@ -13,7 +13,6 @@ jobs:
       install-awscli: true
       publish-dir:    extension
       publish-script: ./publish-layer.sh
-      layer-name-aws: NewRelicLambdaExtension
       artifact-key:   extension
       artifact-label: Extension
       language-name:  Extension

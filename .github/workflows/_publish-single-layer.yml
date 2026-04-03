@@ -20,10 +20,6 @@ on:
         description: 'Publish script to run inside publish-dir (e.g. ./publish-layers.sh)'
         required: true
         type: string
-      layer-name-aws:
-        description: 'AWS Lambda layer name used for post-publish validation (e.g. NewRelicDotnet)'
-        required: true
-        type: string
       artifact-key:
         description: 'Short key used for the result artifact name and file (e.g. dotnet, extension)'
         required: true
