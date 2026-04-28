@@ -127,15 +127,24 @@ jobs:
           S3_BUCKET_PREFIX: ${{ vars.S3_BUCKET_PREFIX }}
         run: |
           if [[ "${{ matrix.java-version }}" == "java21" ]]; then
+            failed_file="$(mktemp)"
+            chmod a+rw "$failed_file" "$GITHUB_STEP_SUMMARY"
+            set +e
             docker run \
               -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
-              -e GITHUB_OUTPUT -e GITHUB_STEP_SUMMARY \
+              -e GITHUB_STEP_SUMMARY \
               -e PUBLISH_REGIONS \
               -e LAYER_REGIONS \
               -e S3_BUCKET_PREFIX \
-              -v "$GITHUB_OUTPUT:$GITHUB_OUTPUT" \
+              -e "FAILED_REGIONS_FILE=${failed_file}" \
               -v "$GITHUB_STEP_SUMMARY:$GITHUB_STEP_SUMMARY" \
+              -v "${failed_file}:${failed_file}" \
               newrelic-lambda-layers-java21
+            docker_exit=$?
+            set -e
+            [[ -s "${failed_file}" ]] && cat "${failed_file}" >> "$GITHUB_OUTPUT" || true
+            rm -f "${failed_file}"
+            exit "${docker_exit}"
           else
             make publish-${{ matrix.java-version }}-ci
           fi
@@ -174,18 +183,17 @@ jobs:
           language_name: Java
           versions_json: |-
             [
-              {"key":"java8al2","label":"Java 8 (AL2)","job":"publish-java (java8al2)","fallback":"${{ needs.publish-java.result }}"},
-              {"key":"java11","label":"Java 11","job":"publish-java (java11)","fallback":"${{ needs.publish-java.result }}"},
-              {"key":"java17","label":"Java 17","job":"publish-java (java17)","fallback":"${{ needs.publish-java.result }}"},
-              {"key":"java21","label":"Java 21","job":"publish-java (java21)","fallback":"${{ needs.publish-java.result }}"}
+              {"key":"java8al2","label":"Java 8 (AL2)","job":"publish-java (java8al2)","fallback":"${{ needs.publish-java.result }}","failure_key":"java-java8al2"},
+              {"key":"java11","label":"Java 11","job":"publish-java (java11)","fallback":"${{ needs.publish-java.result }}","failure_key":"java-java11"},
+              {"key":"java17","label":"Java 17","job":"publish-java (java17)","fallback":"${{ needs.publish-java.result }}","failure_key":"java-java17"},
+              {"key":"java21","label":"Java 21","job":"publish-java (java21)","fallback":"${{ needs.publish-java.result }}","failure_key":"java-java21"}
             ]
-          failure_summaries: |
-            ${{ needs.publish-java.outputs.failure_summary }}
-            ${{ needs.publish-java.outputs.ecr_failure_summary }}
+          failure_summaries: ${{ needs.publish-java.outputs.ecr_failure_summary }}
           slack_webhook: ${{ secrets.SLACK_VALIDATION_WEBHOOK }}
           gh_token: ${{ github.token }}
           repo: ${{ github.repository }}
           run_id: ${{ github.run_id }}
+          run_attempt: ${{ github.run_attempt }}
           ref_name: ${{ github.ref_name }}
           actor: ${{ github.actor }}
           server_url: ${{ github.server_url }}
