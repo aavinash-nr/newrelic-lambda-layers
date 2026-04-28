@@ -33,6 +33,21 @@ REGIONS=(
   us-west-2
 )
 
+# Override the default region list for testing:
+#   LAYER_REGIONS="us-east-1,us-west-2" ./publish-layers.sh ...
+if [[ -n "${LAYER_REGIONS:-}" ]]; then
+  IFS=',' read -ra REGIONS <<< "${LAYER_REGIONS//[[:space:]]/}"
+  echo "=== LAYER_REGIONS override: publishing to ${#REGIONS[@]} region(s): ${REGIONS[*]} ==="
+fi
+
+# S3 bucket name prefix — bucket per region is "<prefix>-<region>".
+# Override for testing: S3_BUCKET_PREFIX="my-test-bucket-prefix"
+S3_BUCKET_PREFIX="${S3_BUCKET_PREFIX:-nr-layers}"
+
+# Public ECR repository alias — override for testing:
+#   ECR_REPOSITORY="q6k3q1g1" ./publish-layers.sh build-publish-20-ecr-image
+ECR_REPOSITORY="${ECR_REPOSITORY:-x6n7b2o2}"
+
 EXTENSION_DIST_DIR=extensions
 EXTENSION_DIST_ZIP=extension.zip
 EXTENSION_DIST_PREVIEW_FILE=preview-extensions-ggqizro707
@@ -290,7 +305,7 @@ function publish_layer {
 
     hash=$( hash_file $layer_archive | awk '{ print $1 }' )
 
-    bucket_name="nr-layers-${region}"
+    bucket_name="${S3_BUCKET_PREFIX}-${region}"
     s3_key="$( s3_prefix $runtime_name )/${hash}.${arch}.zip"
 
     compat_list=( $runtime_name )
@@ -457,9 +472,8 @@ function publish_docker_ecr {
       echo "File does not start with 'dist/': $file_without_dist"
     fi
 
-    # public ecr repository name
-    # maintainer can use this("q6k3q1g1") repo name for testing
-    repository="x6n7b2o2"
+    # Public ECR repository alias — set ECR_REPOSITORY env var to override
+    repository="${ECR_REPOSITORY}"
 
     # copy dockerfile
     cp ../Dockerfile.ecrImage .
@@ -596,4 +610,56 @@ run_region_loop() {
     echo "ERROR: ${#failed[@]}/${total} region(s) failed"
     return 1
   fi
+}
+
+# Global accumulators for ECR publish results within one script invocation.
+declare -ga _ECR_PASSED=()
+declare -ga _ECR_FAILED=()
+
+# Calls publish_docker_ecr; accumulates pass/fail into _ECR_PASSED/_ECR_FAILED.
+# Never propagates failure — call finalize_ecr_results at the end instead.
+# Args: same as publish_docker_ecr (<zip> <runtime> <arch> [slim])
+publish_ecr_safe() {
+  local label="${2}-${3}${4:+-$4}"
+  if publish_docker_ecr "$@"; then
+    echo "  [ECR OK]   ${label}"
+    _ECR_PASSED+=("$label")
+  else
+    echo "  [ECR FAIL] ${label} — see Docker/AWS error above"
+    _ECR_FAILED+=("$label")
+  fi
+  return 0
+}
+
+# Writes ECR summary table to $GITHUB_STEP_SUMMARY and ecr_failure_summary to
+# $GITHUB_OUTPUT, then returns 1 if any images failed.
+# Call once after all publish_ecr_safe calls for a given publish block.
+# Args: [label] — optional human label for the summary heading
+finalize_ecr_results() {
+  local label="${1:-ECR}"
+  local total=$(( ${#_ECR_PASSED[@]} + ${#_ECR_FAILED[@]} ))
+
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    {
+      printf "### ECR Image Publish: %s\n" "$label"
+      printf "| Image | Status |\n|-------|--------|\n"
+      for i in "${_ECR_PASSED[@]}"; do printf "| \`%s\` | ✅ passed |\n" "$i"; done
+      for i in "${_ECR_FAILED[@]}"; do printf "| \`%s\` | ❌ FAILED |\n" "$i"; done
+    } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+  fi
+
+  echo ""
+  echo "=== ECR Publish Summary: ${label} ==="
+  echo "  Passed (${#_ECR_PASSED[@]}/${total}): ${_ECR_PASSED[*]:-none}"
+  echo "  Failed (${#_ECR_FAILED[@]}/${total}): ${_ECR_FAILED[*]:-none}"
+
+  if [[ ${#_ECR_FAILED[@]} -gt 0 ]]; then
+    if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+      echo "ecr_failure_summary=${#_ECR_FAILED[@]}/${total} ECR images failed: ${_ECR_FAILED[*]}" \
+        >> "$GITHUB_OUTPUT" 2>/dev/null || true
+    fi
+    echo "ERROR: ${#_ECR_FAILED[@]}/${total} ECR image(s) failed"
+    return 1
+  fi
+  return 0
 }
