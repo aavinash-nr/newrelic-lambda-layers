@@ -52,7 +52,7 @@ EXTENSION_DIST_DIR=extensions
 EXTENSION_DIST_ZIP=extension.zip
 EXTENSION_DIST_PREVIEW_FILE=preview-extensions-ggqizro707
 
-EXTENSION_VERSION=2.6.4
+EXTENSION_VERSION=2.7.1
 
 function list_all_regions {
     aws ec2 describe-regions \
@@ -64,7 +64,7 @@ function list_all_regions {
 function fetch_extension {
     arch=$1
 
-    url="https://github.com/newrelic/newrelic-lambda-extension/releases/download/v${EXTENSION_VERSION}/newrelic-lambda-extension.${arch}.zip"
+    url="https://github.com/newrelic/newrelic-lambda-extension-rust/releases/download/v${EXTENSION_VERSION}/newrelic-lambda-extension.${arch}.zip"
     rm -rf $EXTENSION_DIST_DIR $EXTENSION_DIST_ZIP
     curl -L $url -o $EXTENSION_DIST_ZIP
 }
@@ -100,8 +100,6 @@ function layer_name_str() {
     "java")
       rt_part="AgentJava"
       ;;
-    "python3.9")
-      rt_part="Python39"
       ;;
     "python3.10")
       rt_part="Python310"
@@ -139,6 +137,9 @@ function layer_name_str() {
     "ruby3.4")
       rt_part="Ruby34"
       ;;
+    "ruby4.0")
+      rt_part="Ruby40"
+      ;;
     "dotnet")
       rt_part="Dotnet"
       ;;
@@ -168,9 +169,6 @@ function s3_prefix() {
       ;;
     "java")
       name="nr-java-agent"
-      ;;
-    "python3.9")
-      name="nr-python3.9"
       ;;
     "python3.10")
       name="nr-python3.10"
@@ -205,6 +203,9 @@ function s3_prefix() {
     "ruby3.4")
       name="nr-ruby3.4"
       ;;
+    "ruby4.0")
+      name="nr-ruby4.0"
+      ;;
     "dotnet")
       name="nr-dotnet"
       ;;
@@ -227,13 +228,13 @@ function agent_name_str() {
         "nodejs"|"nodejs22.x"|"nodejs24.x")
             agent_name="Node"
             ;;
-        "ruby3.2"|"ruby3.3"|"ruby3.4")
+        "ruby3.2"|"ruby3.3"|"ruby3.4"|"ruby4.0")
             agent_name="Ruby"
             ;;
         "java8.al2"|"java11"|"java17"|"java21"|"java25"|"java")
             agent_name="Java"
             ;;
-        "python"|"python3.9"|"python3.10"|"python3.11"|"python3.12"|"python3.13"|"python3.14")
+        "python"|"python3.10"|"python3.11"|"python3.12"|"python3.13"|"python3.14")
             agent_name="Python"
             ;;
         *)
@@ -316,7 +317,7 @@ function publish_layer {
     fi
     
     if [[ $runtime_name == "python" ]]
-    then compat_list=("python3.9" "python3.10" "python3.11" "python3.12" "python3.13" "python3.14")
+    then compat_list=("python3.10" "python3.11" "python3.12" "python3.13" "python3.14")
     fi
 
     if [[ $runtime_name == "nodejs" ]]
@@ -384,7 +385,7 @@ function publish_staging_layer {
     compat_list=( $runtime_name )
     if [[ $runtime_name == "provided" ]]; then compat_list=("provided" "provided.al2" "provided.al2023" "dotnetcore3.1"); fi
     if [[ $runtime_name == "dotnet" ]];   then compat_list=("dotnet6" "dotnet8" "dotnet10"); fi
-    if [[ $runtime_name == "python" ]];   then compat_list=("python3.9" "python3.10" "python3.11" "python3.12" "python3.13" "python3.14"); fi
+    if [[ $runtime_name == "python" ]];   then compat_list=("python3.10" "python3.11" "python3.12" "python3.13" "python3.14"); fi
     if [[ $runtime_name == "nodejs" ]];   then compat_list=("nodejs22.x" "nodejs24.x"); fi
 
     echo "Publishing staging layer ${staging_layer_name} (${arch}) to ${STAGING_REGION}" >&2
